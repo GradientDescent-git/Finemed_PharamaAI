@@ -1,0 +1,33 @@
+# Python Generated Files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Jupyter Notebook Generated Files
+.ipynb_checkpoints/
+
+# Confidential Company Data
+Data/raw_data/
+Data/tempprocess_data/
+
+# Environment Variables & Secrets
+.env
+
+# Log Files
+logs/
+*.log
+
+# VS Code Settings
+.vscode/
+
+# ML Model Artifacts
+
+artifacts/
+*.pkl
+*.joblib
+*.h5
+
+# Operating System Files
+.DS_Store
+Thumbs.db
