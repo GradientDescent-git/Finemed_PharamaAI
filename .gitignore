@@ -12,7 +12,7 @@ Data/raw_data/
 Data/tempprocess_data/
 
 # Environment Variables & Secrets
-.venv
+.venv/
 
 # Log Files
 logs/
