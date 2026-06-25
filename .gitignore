@@ -1,3 +1,6 @@
+# Environment Variables & Secrets
+.venv/
+
 # Python Generated Files
 __pycache__/
 *.pyc
@@ -10,9 +13,6 @@ __pycache__/
 # Confidential Company Data
 Data/raw_data/
 Data/tempprocess_data/
-
-# Environment Variables & Secrets
-.venv/
 
 # Log Files
 logs/
