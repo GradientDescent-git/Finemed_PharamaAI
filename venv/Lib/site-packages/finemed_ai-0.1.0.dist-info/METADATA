@@ -1,0 +1,7 @@
+Metadata-Version: 2.4
+Name: finemed-ai
+Version: 0.1.0
+Summary: AI-powered data warehouse and analytics system for Finemed Pharma ERP data
+Requires-Python: >=3.10
+Requires-Dist: pandas
+Requires-Dist: dbfread

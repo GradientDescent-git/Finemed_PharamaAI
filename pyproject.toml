@@ -1,0 +1,12 @@
+[project]
+name = "finemed-ai"
+version = "0.1.0"
+description = "AI-powered data warehouse and analytics system for Finemed Pharma ERP data"
+requires-python = ">=3.10"
+dependencies = [
+    "pandas",
+    "dbfread",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
