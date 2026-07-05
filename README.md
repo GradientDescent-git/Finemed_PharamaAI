@@ -1,1 +1,0 @@
-# Finemed_PharamaAI
