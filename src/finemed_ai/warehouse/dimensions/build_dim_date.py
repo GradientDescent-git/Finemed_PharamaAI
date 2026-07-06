@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import pandas as pd
 
-def get_financial_year(date: pd.Timestamp) -> str:
+
+def _get_financial_year(date: pd.Timestamp) -> str:
     year = date.year
 
     if date.month >= 4:
@@ -10,7 +11,7 @@ def get_financial_year(date: pd.Timestamp) -> str:
 
     return f"FY {year - 1}-{str(year)[-2:]}"
 
-def get_financial_month(date: pd.Timestamp) -> int:
+def _get_financial_month(date: pd.Timestamp) -> int:
     if date.month >= 4:
         return date.month - 3
 
@@ -37,7 +38,6 @@ def build_dim_date(start_date: str, end_date: str) -> pd.DataFrame:
     dim_date["quarter"] = dim_date["full_date"].dt.quarter
     dim_date["year"] = dim_date["full_date"].dt.year
     dim_date["is_weekend"] = dim_date["full_date"].dt.dayofweek.isin([5, 6])
-
     dim_date["financial_year"] = dim_date["full_date"].apply(_get_financial_year)
     dim_date["financial_month"] = dim_date["full_date"].apply(_get_financial_month)
 
