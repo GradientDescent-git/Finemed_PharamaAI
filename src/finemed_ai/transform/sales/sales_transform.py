@@ -82,7 +82,7 @@ class SalesTransformer:
 
 #Join dimensions table
 
-def join_dimensions(self) -> None:
+    def join_dimensions(self) -> None:
 
         log_step(logger, "Joining Sales with Customer Dimension...")
 
@@ -128,13 +128,9 @@ def join_dimensions(self) -> None:
         log_step(logger, "Creating ML Features...")
 
     
-    # Save Silver Dataset
-    
-
+# Save Silver Dataset
     def save(self, output_path: Path) -> None:
-
         log_step(logger, "Saving Sales Silver Dataset...")
-
         save_parquet(
             self.sales_df,
             output_path,
@@ -142,9 +138,8 @@ def join_dimensions(self) -> None:
         )
 
 
-    # Pipeline
+# Pipeline
     
-
     def run(self, output_path: Path) -> None:
 
         self.load_data()
@@ -159,3 +154,6 @@ def join_dimensions(self) -> None:
 
         self.save(output_path)
 
+    
+    def join_sales_with_medicine(sales_df: pd.DataFrame,medicine_df: pd.DataFrame) -> pd.DataFrame:
+        return merge_dimension(sales_df,medicine_df,fact_key="Medicine_ID",dimension_key="Medicine_ID")
