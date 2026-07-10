@@ -77,3 +77,4 @@ def run_sales_pipeline() -> None:
 if __name__ == "__main__":
 
     run_sales_pipeline()
+    
