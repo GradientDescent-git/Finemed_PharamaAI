@@ -3,8 +3,12 @@ from __future__ import annotations
 import pandas as pd
 
 
-def build_fact_sales_line(tables: dict[str, pd.DataFrame]) -> pd.DataFrame:
-    table_name = "INVDET.DAT"
+def build_fact_purchase_line(
+    tables: dict[str, pd.DataFrame],
+) -> pd.DataFrame:
+    """ Build fact_purchase_line from PURCHASE.DAT. """
+
+    table_name = "PURCHASE.DAT"
 
     if table_name not in tables:
         raise KeyError(f"{table_name} not found in extracted tables.")
@@ -12,27 +16,23 @@ def build_fact_sales_line(tables: dict[str, pd.DataFrame]) -> pd.DataFrame:
     source = tables[table_name].copy()
 
     required_columns = [
-        "INVNO",
+        "PINVNO",
         "MDCODE",
-        "BATCH",
+        "BAT",
         "EXP",
         "QTY",
         "FQTY",
-        "RATE",
-        "SERATE",
-        "ACRATE",
         "PRATE",
+        "SRATE",
         "MRP",
         "TCODE",
-        "CANCEL_ID",
-        "SUPNO",
-        "LPDT",
-        "RATCHG",
+        "SOH",
         "SOURCE_MONTH",
     ]
 
     missing_columns = [
-        col for col in required_columns
+        col
+        for col in required_columns
         if col not in source.columns
     ]
 
@@ -41,28 +41,28 @@ def build_fact_sales_line(tables: dict[str, pd.DataFrame]) -> pd.DataFrame:
             f"Missing required columns: {missing_columns}"
         )
 
-    fact_sales_line = source[
+    fact_purchase_line = source[
         required_columns
     ].copy()
 
-    fact_sales_line = (
-        fact_sales_line
+    fact_purchase_line = (
+        fact_purchase_line
         .drop_duplicates(
             subset=[
                 "SOURCE_MONTH",
-                "INVNO",
+                "PINVNO",
                 "MDCODE",
-                "BATCH",
+                "BAT",
             ]
         )
         .sort_values(
             [
                 "SOURCE_MONTH",
-                "INVNO",
+                "PINVNO",
                 "MDCODE",
             ]
         )
         .reset_index(drop=True)
     )
 
-    return fact_sales_line
+    return fact_purchase_line

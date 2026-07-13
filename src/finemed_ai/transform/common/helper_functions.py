@@ -151,12 +151,31 @@ def validate_dataframe_not_empty(df: pd.DataFrame,logger: logging.Logger,df_name
         raise ValueError(f"{df_name} is empty.")
 
     logger.info(
-        "%s validation passed (rows=%d).",
-        df_name,
-        len(df),
-    )
+    "%s validation passed | rows=%d | columns=%d",
+    df_name,
+    len(df),
+    len(df.columns))
 
-def validate_columns_exist(df: pd.DataFrame,required_columns: list[str],logger: logging.Logger,df_name: str = "DataFrame") -> None:
+def safe_divide(
+    numerator: float | int,
+    denominator: float | int,
+    default: float = 0.0) -> float:
+
+    if (
+        pd.isna(numerator)
+        or pd.isna(denominator)
+        or denominator == 0
+    ):
+        return default
+
+    return numerator / denominator
+
+def validate_columns_exist(
+    df: pd.DataFrame,
+    required_columns: list[str],
+    logger: logging.Logger,
+    df_name: str = "DataFrame",
+) -> None:
     missing = [
         column
         for column in required_columns
@@ -169,7 +188,7 @@ def validate_columns_exist(df: pd.DataFrame,required_columns: list[str],logger: 
             df_name,
             missing,
         )
-        raise ValueError(
+        raise KeyError(
             f"{df_name} missing columns: {missing}"
         )
 
@@ -178,7 +197,13 @@ def validate_columns_exist(df: pd.DataFrame,required_columns: list[str],logger: 
         df_name,
     )
 
-def validate_no_duplicate_keys(df: pd.DataFrame,key_columns: list[str],logger: logging.Logger,df_name: str = "DataFrame") -> None:
+def validate_no_duplicate_keys(
+    df: pd.DataFrame,
+    key_columns: list[str],
+    logger: logging.Logger,
+    df_name: str = "DataFrame",
+) -> None:
+
     validate_columns_exist(
         df,
         key_columns,
@@ -229,22 +254,39 @@ def validate_no_nulls(df: pd.DataFrame,columns: list[str],logger: logging.Logger
             )
 
     logger.info(
-        "%s null validation passed.",
-        df_name,
-    )
-
+    "%s null validation passed.",
+    df_name,
+)
+    
 # Date Utilities
-def convert_to_datetime(df: pd.DataFrame,column: str,logger: logging.Logger,errors: str = "coerce") -> pd.DataFrame:
+def convert_to_datetime(
+    df: pd.DataFrame,
+    column: str,
+    logger: logging.Logger,
+    errors: str = "coerce",
+) -> pd.DataFrame:
+
     validate_columns_exist(
         df,
         [column],
         logger=logger,
     )
 
+    original_nulls = df[column].isna().sum()
+
     df[column] = pd.to_datetime(
         df[column],
         errors=errors,
     )
+
+    invalid_dates = df[column].isna().sum() - original_nulls
+
+    if invalid_dates > 0:
+        logger.warning(
+            "%s invalid date values converted to NaT in column %s",
+            invalid_dates,
+            column,
+        )
 
     return df
 
@@ -331,14 +373,27 @@ def extract_day_name(df: pd.DataFrame,date_column: str,logger: logging.Logger,ou
     return df
 
 # Missing Value Utilities
-def fill_missing_numeric(df: pd.DataFrame,columns: list[str],logger: logging.Logger,value: float | int = 0) -> pd.DataFrame:
+def fill_missing_numeric(
+    df: pd.DataFrame,
+    columns: list[str],
+    logger: logging.Logger,
+    value: float | int = 0,
+) -> pd.DataFrame:
+
     validate_columns_exist(
         df,
         columns,
         logger=logger,
     )
 
-    df[columns] = df[columns].fillna(value)
+    for column in columns:
+
+        if not pd.api.types.is_numeric_dtype(df[column]):
+            raise TypeError(
+                f"{column} is not numeric."
+            )
+
+        df[column] = df[column].fillna(value)
 
     return df
 
@@ -366,7 +421,12 @@ def fill_missing_boolean(df: pd.DataFrame,columns: list[str],logger: logging.Log
 
 # Text Utilities
 
-def trim_whitespace(df: pd.DataFrame,columns: list[str],logger: logging.Logger) -> pd.DataFrame:
+def trim_whitespace(
+    df: pd.DataFrame,
+    columns: list[str],
+    logger: logging.Logger,
+) -> pd.DataFrame:
+
     validate_columns_exist(
         df,
         columns,
@@ -374,11 +434,22 @@ def trim_whitespace(df: pd.DataFrame,columns: list[str],logger: logging.Logger) 
     )
 
     for column in columns:
-        df[column] = df[column].astype(str).str.strip()
+        mask = df[column].notna()
+
+        df.loc[mask, column] = (
+            df.loc[mask, column]
+            .astype(str)
+            .str.strip()
+        )
 
     return df
 
-def normalize_text(df: pd.DataFrame,columns: list[str],logger: logging.Logger) -> pd.DataFrame:
+def normalize_text(
+    df: pd.DataFrame,
+    columns: list[str],
+    logger: logging.Logger,
+) -> pd.DataFrame:
+
     validate_columns_exist(
         df,
         columns,
@@ -386,8 +457,10 @@ def normalize_text(df: pd.DataFrame,columns: list[str],logger: logging.Logger) -
     )
 
     for column in columns:
-        df[column] = (
-            df[column]
+        mask = df[column].notna()
+
+        df.loc[mask, column] = (
+            df.loc[mask, column]
             .astype(str)
             .str.strip()
             .str.upper()
@@ -396,12 +469,6 @@ def normalize_text(df: pd.DataFrame,columns: list[str],logger: logging.Logger) -
     return df
 
 # Numeric Utilities
-def safe_divide(numerator: float | int,denominator: float | int,default: float = 0.0) -> float:
-    if pd.isna(denominator) or denominator == 0:
-        return default
-
-    return numerator / denominator
-
 def round_numeric_columns(df: pd.DataFrame,columns: list[str],logger: logging.Logger,decimals: int = 2) -> pd.DataFrame:
     validate_columns_exist(
         df,
