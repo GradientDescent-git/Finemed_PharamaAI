@@ -20,34 +20,44 @@ def main() -> None:
     log_step(logger, "Starting Medicine Silver Layer Pipeline")
     log_step(logger, "=" * 70)
 
-    
+    # --------------------------------------------------
     # Warehouse Input
-    
+    # --------------------------------------------------
 
     medicine_dimension_path = Path(
         "data/03_warehouse/dimensions/dim_product.parquet"
     )
 
-    
+    # --------------------------------------------------
     # Silver Output
-    
+    # --------------------------------------------------
+
     output_path = Path(
         "data/04_silver/medicine/medicine_silver.parquet"
     )
 
-    
-    # Execute Pipeline
-    
+    try:
 
-    transformer = MedicineTransformer(
-        medicine_dimension_path=medicine_dimension_path,
-    )
+        transformer = MedicineTransformer(
+            medicine_dimension_path=medicine_dimension_path,
+        )
 
-    transformer.run(output_path)
+        transformer.run(output_path)
 
-    log_step(logger, "=" * 70)
-    log_step(logger, "Medicine Silver Layer Completed Successfully")
-    log_step(logger, "=" * 70)
+        log_step(logger, "=" * 70)
+        log_step(
+            logger,
+            "Medicine Silver Layer Completed Successfully",
+        )
+        log_step(logger, "=" * 70)
+
+    except Exception:
+
+        logger.exception(
+            "Medicine Silver Layer Pipeline Failed."
+        )
+
+        raise
 
 
 if __name__ == "__main__":

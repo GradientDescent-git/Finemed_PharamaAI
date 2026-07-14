@@ -11,6 +11,13 @@ from finemed_ai.transform.common.helper_functions import (
     log_step,
     log_dataframe_info,
     validate_dataframe_not_empty,
+    trim_whitespace,
+    normalize_text,
+    fill_missing_numeric,
+    fill_missing_text,
+    fill_missing_boolean,
+    round_numeric_columns,
+    convert_to_datetime,
 )
 
 from finemed_ai.transform.common.joins import (
@@ -19,28 +26,31 @@ from finemed_ai.transform.common.joins import (
 
 logger = get_logger(__name__)
 
+
 class InventoryTransformer:
+
     def __init__(
         self,
         inventory_fact_path: Path,
         medicine_dimension_path: Path,
-        date_dimension_path: Path,
-    ) -> None:
+        date_dimension_path: Path) -> None:
 
         self.inventory_fact_path = inventory_fact_path
-
         self.medicine_dimension_path = medicine_dimension_path
         self.date_dimension_path = date_dimension_path
 
         self.inventory_df: pd.DataFrame | None = None
-
         self.medicine_df: pd.DataFrame | None = None
         self.date_df: pd.DataFrame | None = None
 
     # Load Warehouse Tables
+
     def load_data(self) -> None:
 
-        log_step(logger, "Loading Inventory Warehouse Tables...")
+        log_step(
+            logger,
+            "Loading Inventory Warehouse Tables...",
+        )
 
         self.inventory_df = load_parquet(
             self.inventory_fact_path,
@@ -59,8 +69,20 @@ class InventoryTransformer:
 
         validate_dataframe_not_empty(
             self.inventory_df,
-            "Inventory Fact",
             logger,
+            "Inventory Fact",
+        )
+
+        validate_dataframe_not_empty(
+            self.medicine_df,
+            logger,
+            "Medicine Dimension",
+        )
+
+        validate_dataframe_not_empty(
+            self.date_df,
+            logger,
+            "Date Dimension",
         )
 
         log_dataframe_info(
@@ -69,10 +91,35 @@ class InventoryTransformer:
             "Inventory Fact",
         )
 
+        log_dataframe_info(
+            logger,
+            self.medicine_df,
+            "Medicine Dimension",
+        )
+
+        log_dataframe_info(
+            logger,
+            self.date_df,
+            "Date Dimension",
+        )
+
     # Join Dimension Tables
+
     def join_dimensions(self) -> None:
 
-        log_step(logger, "Joining Medicine Dimension...")
+        if self.inventory_df is None:
+            raise ValueError("Inventory Fact not loaded.")
+
+        if self.medicine_df is None:
+            raise ValueError("Medicine Dimension not loaded.")
+
+        if self.date_df is None:
+            raise ValueError("Date Dimension not loaded.")
+
+        log_step(
+            logger,
+            "Joining Medicine Dimension...",
+        )
 
         self.inventory_df = merge_dimension(
             self.inventory_df,
@@ -81,7 +128,10 @@ class InventoryTransformer:
             dimension_key="Medicine_ID",
         )
 
-        log_step(logger, "Joining Date Dimension...")
+        log_step(
+            logger,
+            "Joining Date Dimension...",
+        )
 
         self.inventory_df = merge_dimension(
             self.inventory_df,
@@ -89,29 +139,219 @@ class InventoryTransformer:
             fact_key="Date_ID",
             dimension_key="Date_ID",
         )
-    
+
+        logger.info(
+            "Dimension joins completed successfully."
+        )
+
     # Cleaning
     def clean_data(self) -> None:
 
-        log_step(logger, "Cleaning Inventory Dataset...")
+        log_step(
+            logger,
+            "Cleaning Inventory Dataset...",
+        )
+
+        if self.inventory_df is None:
+            raise ValueError("Inventory dataframe is not loaded.")
+
+        # 1. Trim whitespace
+
+        trim_whitespace(
+            self.inventory_df,
+            columns=[
+                "Medicine_Name",
+                "Company_Name",
+                "Batch_No",
+            ],
+            logger=logger,
+        )
+
+        # 2. Normalize text
+
+        normalize_text(
+            self.inventory_df,
+            columns=[
+                "Medicine_Name",
+                "Company_Name",
+            ],
+            logger=logger,
+        )
+
+        # 3. Convert dates
+
+        convert_to_datetime(
+            self.inventory_df,
+            column="Expiry_Date",
+            logger=logger,
+        )
+
+        # 4. Fill missing text
+
+        fill_missing_text(
+            self.inventory_df,
+            columns=[
+                "Company_Name",
+            ],
+            logger=logger,
+        )
+
+        # 5. Fill missing numeric
+
+        fill_missing_numeric(
+            self.inventory_df,
+            columns=[
+                "Stock_Qty",
+                "Purchase_Rate",
+                "MRP",
+            ],
+            logger=logger,
+        )
+
+        # 6. Remove duplicates
+
+        before = len(self.inventory_df)
+
+        self.inventory_df = (
+            self.inventory_df.drop_duplicates().reset_index(drop=True)
+        )
+
+        removed = before - len(self.inventory_df)
+
+        logger.info(
+            "Duplicate rows removed: %d",
+            removed,
+        )
+
+        # 7. Final validation
+
+        validate_dataframe_not_empty(
+            self.inventory_df,
+            logger,
+            "Inventory Dataset",
+        )
+
+        log_dataframe_info(
+            logger,
+            self.inventory_df,
+            "Inventory Dataset",
+        )
+
+        logger.info(
+            "Inventory cleaning completed successfully."
+        )
 
     # Business Transformations
+
     def business_transformations(self) -> None:
 
-        log_step(logger, "Creating Inventory Business Columns...")
+        if self.inventory_df is None:
+            raise ValueError("Inventory dataframe is not loaded.")
 
-    # Feature Engineering
-    def feature_engineering(self) -> None:
+        log_step(
+            logger,
+            "Creating Inventory Business Columns...",
+        )
 
-        log_step(logger, "Creating Inventory ML Features...")
+        # Inventory Value
+
+        if {"SOH", "PRATE"}.issubset(self.inventory_df.columns):
+
+            self.inventory_df["Inventory_Value"] = (
+                self.inventory_df["SOH"]
+                * self.inventory_df["PRATE"]
+            )
+
+        # Expiry Date
+
+        if "EXP" in self.inventory_df.columns:
+
+            self.inventory_df["Expiry_Date"] = pd.to_datetime(
+                self.inventory_df["EXP"],
+                errors="coerce",
+            )
+
+        # Days Until Expiry
+
+        if "Expiry_Date" in self.inventory_df.columns:
+
+            today = pd.Timestamp.today().normalize()
+
+            self.inventory_df["Days_To_Expiry"] = (
+                self.inventory_df["Expiry_Date"] - today
+            ).dt.days
+
+        # Expiry Bucket
+
+        if "Days_To_Expiry" in self.inventory_df.columns:
+
+            self.inventory_df["Expiry_Bucket"] = pd.cut(
+                self.inventory_df["Days_To_Expiry"],
+                bins=[
+                    -99999,
+                    0,
+                    30,
+                    90,
+                    180,
+                    365,
+                    99999,
+                ],
+                labels=[
+                    "Expired",
+                    "0-30 Days",
+                    "31-90 Days",
+                    "91-180 Days",
+                    "181-365 Days",
+                    ">365 Days",
+                ],
+            )
+
+        # Stock Status
+
+        if "SOH" in self.inventory_df.columns:
+
+            self.inventory_df["Stock_Status"] = "In Stock"
+
+            self.inventory_df.loc[
+                self.inventory_df["SOH"] <= 0,
+                "Stock_Status",
+            ] = "Out Of Stock"
+
+            self.inventory_df.loc[
+                (self.inventory_df["SOH"] > 0)
+                & (self.inventory_df["SOH"] <= 10),
+                "Stock_Status",
+            ] = "Low Stock"
+
+        # Reorder Flag
+
+        if "SOH" in self.inventory_df.columns:
+
+            self.inventory_df["Reorder_Flag"] = (
+                self.inventory_df["SOH"] <= 10
+            )
+
+        logger.info(
+            "Inventory business transformations completed."
+        )
 
     # Save Silver Dataset
+
     def save(
         self,
         output_path: Path,
     ) -> None:
 
-        log_step(logger, "Saving Inventory Silver Dataset...")
+        log_step(
+            logger,
+            "Saving Inventory Silver Dataset...",
+        )
+
+        validate_dataframe_not_empty(
+            self.inventory_df,
+            logger,
+            "Inventory Silver Dataset",
+        )
 
         save_parquet(
             self.inventory_df,
@@ -119,20 +359,43 @@ class InventoryTransformer:
             logger,
         )
 
+        logger.info(
+            "Inventory Silver Dataset saved successfully."
+        )
+
+        logger.info(
+            "Silver dataset saved to %s",
+            output_path,
+        )
+
     # Pipeline
+
     def run(
         self,
         output_path: Path,
     ) -> None:
 
-        self.load_data()
+        try:
 
-        self.join_dimensions()
+            self.load_data()
 
-        self.clean_data()
+            self.join_dimensions()
 
-        self.business_transformations()
+            self.clean_data()
 
-        self.feature_engineering()
+            self.business_transformations()
 
-        self.save(output_path)
+            self.save(output_path)
+
+            logger.info(
+                "Inventory Transformation Completed Successfully. Output: %s",
+                output_path,
+            )
+
+        except Exception:
+
+            logger.exception(
+                "Inventory Transformation Failed."
+            )
+
+            raise

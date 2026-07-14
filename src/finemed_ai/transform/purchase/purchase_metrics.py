@@ -4,14 +4,20 @@ import pandas as pd
 
 from finemed_ai.transform.common.helper_functions import (
     validate_columns_exist,
+    validate_dataframe_not_empty,
     safe_divide,
 )
 
 # Purchase Value Metrics
+
 def calculate_total_purchase(
     purchase_df: pd.DataFrame,
     amount_column: str,
 ) -> float:
+
+    validate_dataframe_not_empty(
+        purchase_df,
+    )
 
     validate_columns_exist(
         purchase_df,
@@ -28,6 +34,10 @@ def calculate_daily_purchase(
     date_column: str,
     amount_column: str,
 ) -> pd.DataFrame:
+
+    validate_dataframe_not_empty(
+        purchase_df,
+    )
 
     validate_columns_exist(
         purchase_df,
@@ -48,6 +58,10 @@ def calculate_monthly_purchase(
     amount_column: str,
 ) -> pd.DataFrame:
 
+    validate_dataframe_not_empty(
+        purchase_df,
+    )
+
     validate_columns_exist(
         purchase_df,
         [month_column, amount_column],
@@ -67,6 +81,10 @@ def calculate_yearly_purchase(
     amount_column: str,
 ) -> pd.DataFrame:
 
+    validate_dataframe_not_empty(
+        purchase_df,
+    )
+
     validate_columns_exist(
         purchase_df,
         [year_column, amount_column],
@@ -79,12 +97,17 @@ def calculate_yearly_purchase(
         .reset_index(name="Yearly_Purchase")
     )
 
-   # Supplier Metrics
+# Supplier Metrics
+
 def calculate_supplier_purchase(
     purchase_df: pd.DataFrame,
     supplier_column: str,
     amount_column: str,
 ) -> pd.DataFrame:
+
+    validate_dataframe_not_empty(
+        purchase_df,
+    )
 
     validate_columns_exist(
         purchase_df,
@@ -105,6 +128,10 @@ def calculate_average_supplier_order(
     amount_column: str,
 ) -> pd.DataFrame:
 
+    validate_dataframe_not_empty(
+        purchase_df,
+    )
+
     validate_columns_exist(
         purchase_df,
         [supplier_column, amount_column],
@@ -116,13 +143,18 @@ def calculate_average_supplier_order(
         .mean()
         .reset_index(name="Average_Order")
     )
-    
-    # Medicine Purchase Metrics
+
+# Medicine Purchase Metrics
+
 def calculate_medicine_purchase(
     purchase_df: pd.DataFrame,
     medicine_column: str,
     amount_column: str,
 ) -> pd.DataFrame:
+
+    validate_dataframe_not_empty(
+        purchase_df,
+    )
 
     validate_columns_exist(
         purchase_df,
@@ -144,6 +176,10 @@ def calculate_top_purchased_medicines(
     top_n: int = 10,
 ) -> pd.DataFrame:
 
+    validate_dataframe_not_empty(
+        purchase_df,
+    )
+
     validate_columns_exist(
         purchase_df,
         [medicine_column, quantity_column],
@@ -158,11 +194,17 @@ def calculate_top_purchased_medicines(
         .reset_index(name="Quantity_Purchased")
     )
 
+
 # Purchase Order Metrics
+
 def calculate_total_purchase_orders(
     purchase_df: pd.DataFrame,
     invoice_column: str,
 ) -> int:
+
+    validate_dataframe_not_empty(
+        purchase_df,
+    )
 
     validate_columns_exist(
         purchase_df,
@@ -179,6 +221,16 @@ def calculate_average_purchase_order_value(
     total_orders: int,
 ) -> float:
 
+    if total_purchase < 0:
+        raise ValueError(
+            "Total purchase cannot be negative."
+        )
+
+    if total_orders < 0:
+        raise ValueError(
+            "Total orders cannot be negative."
+        )
+
     return round(
         safe_divide(
             total_purchase,
@@ -187,13 +239,29 @@ def calculate_average_purchase_order_value(
         2,
     )
 
+
 # Procurement Growth Metrics
+
+
 def calculate_purchase_growth(
     current_purchase: float,
     previous_purchase: float,
 ) -> float:
 
-    difference = current_purchase - previous_purchase
+    if current_purchase < 0:
+        raise ValueError(
+            "Current purchase cannot be negative."
+        )
+
+    if previous_purchase < 0:
+        raise ValueError(
+            "Previous purchase cannot be negative."
+        )
+
+    difference = (
+        current_purchase
+        - previous_purchase
+    )
 
     return round(
         safe_divide(
@@ -204,19 +272,31 @@ def calculate_purchase_growth(
     )
 
 # Procurement Cost Metrics
+
 def calculate_average_unit_cost(
     purchase_df: pd.DataFrame,
     quantity_column: str,
     amount_column: str,
 ) -> float:
 
+    validate_dataframe_not_empty(
+        purchase_df,
+    )
+
     validate_columns_exist(
         purchase_df,
         [quantity_column, amount_column],
     )
 
-    total_quantity = purchase_df[quantity_column].sum()
-    total_amount = purchase_df[amount_column].sum()
+    total_quantity = (
+        purchase_df[quantity_column]
+        .sum()
+    )
+
+    total_amount = (
+        purchase_df[amount_column]
+        .sum()
+    )
 
     return round(
         safe_divide(
