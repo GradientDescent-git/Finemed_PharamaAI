@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 
 import pandas as pd
@@ -11,19 +10,31 @@ from finemed_ai.transform.common.helper_functions import (
     save_parquet,
     log_step,
     log_dataframe_info,
-    validate_dataframe_not_empty
+    validate_dataframe_not_empty,
 )
 
 from finemed_ai.transform.common.joins import (
     join_sales_with_customer,
     join_sales_with_date,
-    join_purchase_with_medicine
+    join_sales_with_medicine,
 )
 
 logger = get_logger(__name__)
 
 
-class SalesTransformer:    
+class SalesTransformer:
+    """
+    Sales Silver Layer Transformer.
+
+    Responsibilities
+    ----------------
+    1. Load warehouse tables
+    2. Join dimensions
+    3. Clean data
+    4. Apply business transformations
+    5. Save Silver dataset
+    """
+
     def __init__(
         self,
         fact_sales_path: Path,
@@ -42,11 +53,16 @@ class SalesTransformer:
         self.date_df: pd.DataFrame | None = None
         self.medicine_df: pd.DataFrame | None = None
 
-# Load Warehouse Tables
+    # ---------------------------------------------------------
+    # Load Warehouse Tables
+    # ---------------------------------------------------------
 
     def load_data(self) -> None:
 
-        log_step(logger, "Loading warehouse tables...")
+        log_step(
+            logger,
+            "Loading Sales Warehouse Tables...",
+        )
 
         self.sales_df = load_parquet(
             self.fact_sales_path,
@@ -70,8 +86,8 @@ class SalesTransformer:
 
         validate_dataframe_not_empty(
             self.sales_df,
-            "Fact Sales",
             logger,
+            "Fact Sales",
         )
 
         log_dataframe_info(
@@ -80,80 +96,166 @@ class SalesTransformer:
             "Fact Sales",
         )
 
-#Join dimensions table
+    # ---------------------------------------------------------
+    # Join Dimension Tables
+    # ---------------------------------------------------------
 
     def join_dimensions(self) -> None:
 
-        log_step(logger, "Joining Sales with Customer Dimension...")
+        log_step(
+            logger,
+            "Joining Customer Dimension...",
+        )
 
         self.sales_df = join_sales_with_customer(
             self.sales_df,
             self.customer_df,
         )
 
-        log_step(logger, "Joining Sales with Date Dimension...")
+        log_dataframe_info(
+            logger,
+            self.sales_df,
+            "Sales + Customer",
+        )
+
+        log_step(
+            logger,
+            "Joining Date Dimension...",
+        )
 
         self.sales_df = join_sales_with_date(
             self.sales_df,
             self.date_df,
         )
 
-        log_step(logger, "Joining Sales with Medicine Dimension...")
+        log_dataframe_info(
+            logger,
+            self.sales_df,
+            "Sales + Date",
+        )
 
-        self.sales_df = join_purchase_with_medicine(
+        log_step(
+            logger,
+            "Joining Medicine Dimension...",
+        )
+
+        self.sales_df = join_sales_with_medicine(
             self.sales_df,
             self.medicine_df,
         )
 
-   
+        log_dataframe_info(
+            logger,
+            self.sales_df,
+            "Sales + Medicine",
+        )
+
+        logger.info(
+            "All dimension tables joined successfully."
+        )
+
+    # ---------------------------------------------------------
     # Cleaning
-   
+    # ---------------------------------------------------------
 
     def clean_data(self) -> None:
-        log_step(logger, "Cleaning Sales Dataset...")
 
-   
+        log_step(
+            logger,
+            "Cleaning Sales Dataset...",
+        )
+
+        # Future Cleaning Rules
+        # ---------------------
+        # Trim whitespace
+        # Fill missing values
+        # Normalize text
+        # Remove duplicates
+        # Validate IDs
+        # Remove invalid records
+
+        logger.info(
+            "Sales cleaning completed."
+        )
+
+    # ---------------------------------------------------------
     # Business Transformations
-   
+    # ---------------------------------------------------------
 
     def business_transformations(self) -> None:
-        log_step(logger, "Creating Business Columns...")
 
-  
-    # Feature Engineering
-   
+        log_step(
+            logger,
+            "Creating Sales Business Columns...",
+        )
 
-    def feature_engineering(self) -> None:
-        
-        log_step(logger, "Creating ML Features...")
+        # Future Business KPIs
+        # --------------------
+        # Total Sales
+        # Discount Amount
+        # Net Sales
+        # Profit
+        # Sales Category
+        # Return Flag
+        # High Value Order Flag
 
-    
-# Save Silver Dataset
-    def save(self, output_path: Path) -> None:
-        log_step(logger, "Saving Sales Silver Dataset...")
+        logger.info(
+            "Sales business transformations completed."
+        )
+
+    # ---------------------------------------------------------
+    # Save Silver Dataset
+    # ---------------------------------------------------------
+
+    def save(
+        self,
+        output_path: Path,
+    ) -> None:
+
+        log_step(
+            logger,
+            "Saving Sales Silver Dataset...",
+        )
+
         save_parquet(
             self.sales_df,
             output_path,
             logger,
         )
 
+        logger.info(
+            "Sales Silver Dataset saved successfully."
+        )
 
-# Pipeline
-    
-    def run(self, output_path: Path) -> None:
+    # ---------------------------------------------------------
+    # Pipeline
+    # ---------------------------------------------------------
 
-        self.load_data()
+    def run(
+        self,
+        output_path: Path,
+    ) -> None:
 
-        self.join_dimensions()
+        try:
 
-        self.clean_data()
+            self.load_data()
 
-        self.business_transformations()
+            self.join_dimensions()
 
-        self.feature_engineering()
+            self.clean_data()
 
-        self.save(output_path)
+            self.business_transformations()
 
-    
-    def join_sales_with_medicine(sales_df: pd.DataFrame,medicine_df: pd.DataFrame) -> pd.DataFrame:
-        return merge_dimension(sales_df,medicine_df,fact_key="Medicine_ID",dimension_key="Medicine_ID")
+            self.save(output_path)
+
+            logger.info(
+                "Sales Transformation Completed Successfully."
+            )
+
+        except Exception:
+
+            logger.exception(
+                "Sales Transformation Failed."
+            )
+
+            raise

@@ -11,70 +11,56 @@ from finemed_ai.transform.sales.sales_transform import (
     SalesTransformer,
 )
 
-
 logger = get_logger(__name__)
 
 
-def run_sales_pipeline() -> None:
+def main() -> None:
 
-    log_step(
-        logger,
-        "=" * 70,
-    )
+    try:
 
-    log_step(
-        logger,
-        "Starting Sales Transformation Pipeline",
-    )
+        log_step(logger, "=" * 70)
+        log_step(logger, "Starting Sales Silver Layer Pipeline")
+        log_step(logger, "=" * 70)
 
-    log_step(
-        logger,
-        "=" * 70,
-    )
+        transformer = SalesTransformer(
 
-    transformer = SalesTransformer(
+            fact_sales_path=Path(
+                "data/03_warehouse/facts/fact_sales.parquet"
+            ),
 
-        fact_sales_path=Path(
-            "data/warehouse/fact_sales.parquet"
-        ),
+            dim_customer_path=Path(
+                "data/03_warehouse/dimensions/dim_customer.parquet"
+            ),
 
-        dim_customer_path=Path(
-            "data/warehouse/dim_customer.parquet"
-        ),
+            dim_date_path=Path(
+                "data/03_warehouse/dimensions/dim_date.parquet"
+            ),
 
-        dim_date_path=Path(
-            "data/warehouse/dim_date.parquet"
-        ),
-
-        dim_medicine_path=Path(
-            "data/warehouse/dim_medicine.parquet"
-        ),
-    )
-
-    transformer.run(
-
-        output_path=Path(
-            "data/silver/sales/sales_silver.parquet"
+            dim_medicine_path=Path(
+                "data/03_warehouse/dimensions/dim_product.parquet"
+            ),
         )
-    )
 
-    log_step(
-        logger,
-        "=" * 70,
-    )
+        transformer.run(
 
-    log_step(
-        logger,
-        "Sales Transformation Pipeline Completed Successfully",
-    )
+            output_path=Path(
+                "data/04_silver/sales/sales_silver.parquet"
+            )
+        )
 
-    log_step(
-        logger,
-        "=" * 70,
-    )
+        log_step(logger, "=" * 70)
+        log_step(logger, "Sales Silver Layer Completed Successfully")
+        log_step(logger, "=" * 70)
+
+    except Exception:
+
+        logger.exception(
+            "Sales Silver Layer Pipeline Failed."
+        )
+
+        raise
 
 
 if __name__ == "__main__":
 
-    run_sales_pipeline()
-    
+    main()
