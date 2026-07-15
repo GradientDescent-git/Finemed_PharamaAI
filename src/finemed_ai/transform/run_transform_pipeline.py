@@ -5,9 +5,6 @@ from finemed_ai.transform.common.helper_functions import (
     log_step,
 )
 
-from finemed_ai.transform.customer.run_customer import (
-    main as run_customer,
-)
 
 from finemed_ai.transform.inventory.run_inventory import (
     main as run_inventory,
@@ -39,8 +36,6 @@ def main() -> None:
         log_step(logger, "=" * 80)
         log_step(logger, "Starting Silver Layer Transformation Pipeline")
         log_step(logger, "=" * 80)
-
-        run_customer()
 
         run_medicine()
 
