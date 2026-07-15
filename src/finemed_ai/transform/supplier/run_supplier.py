@@ -16,30 +16,40 @@ logger = get_logger(__name__)
 
 def main() -> None:
 
-    log_step(logger, "=" * 70)
-    log_step(logger, "Starting Supplier Silver Layer Pipeline")
-    log_step(logger, "=" * 70)
+    try:
 
-# Warehouse Input
-supplier_dimension_path = Path(
-        "data/03_warehouse/dimensions/dim_supplier.parquet"
-    )
+        log_step(logger, "=" * 70)
+        log_step(logger, "Starting Supplier Silver Layer Pipeline")
+        log_step(logger, "=" * 70)
 
-# Silver Output
-output_path = Path(
-        "data/04_silver/supplier/supplier_silver.parquet"
-    )
+        # Warehouse Input
+        supplier_dimension_path = Path(
+            "data/03_warehouse/dimensions/dim_supplier.parquet"
+        )
 
-# Execute Pipeline
-transformer = SupplierTransformer(
-        supplier_dimension_path=supplier_dimension_path,
-    )
+        # Silver Output
+        output_path = Path(
+            "data/04_silver/supplier/supplier_silver.parquet"
+        )
 
-    transformer.run(output_path)
+        # Execute Pipeline
+        transformer = SupplierTransformer(
+            supplier_dimension_path=supplier_dimension_path,
+        )
 
-    log_step(logger, "=" * 70)
-    log_step(logger, "Supplier Silver Layer Completed Successfully")
-    log_step(logger, "=" * 70)
+        transformer.run(output_path)
+
+        log_step(logger, "=" * 70)
+        log_step(logger, "Supplier Silver Layer Completed Successfully")
+        log_step(logger, "=" * 70)
+
+    except Exception:
+
+        logger.exception(
+            "Supplier Silver Layer Pipeline Failed."
+        )
+
+        raise
 
 
 if __name__ == "__main__":
