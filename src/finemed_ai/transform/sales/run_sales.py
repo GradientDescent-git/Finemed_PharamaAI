@@ -22,30 +22,41 @@ def main() -> None:
         log_step(logger, "Starting Sales Silver Layer Pipeline")
         log_step(logger, "=" * 70)
 
+        # Warehouse Inputs
+
+        fact_sales_path = Path(
+            "data/03_warehouse/facts/fact_sales.parquet"
+        )
+
+        dim_customer_path = Path(
+            "data/03_warehouse/dimensions/dim_customer.parquet"
+        )
+
+        dim_date_path = Path(
+            "data/03_warehouse/dimensions/dim_date.parquet"
+        )
+
+        dim_medicine_path = Path(
+            "data/03_warehouse/dimensions/dim_product.parquet"
+        )
+
+        # Silver Output
+
+        output_path = Path(
+            "data/04_silver/sales/sales_silver.parquet"
+        )
+
+        # Execute Pipeline
+
         transformer = SalesTransformer(
-
-            fact_sales_path=Path(
-                "data/03_warehouse/facts/fact_sales.parquet"
-            ),
-
-            dim_customer_path=Path(
-                "data/03_warehouse/dimensions/dim_customer.parquet"
-            ),
-
-            dim_date_path=Path(
-                "data/03_warehouse/dimensions/dim_date.parquet"
-            ),
-
-            dim_medicine_path=Path(
-                "data/03_warehouse/dimensions/dim_product.parquet"
-            ),
+            fact_sales_path=fact_sales_path,
+            dim_customer_path=dim_customer_path,
+            dim_date_path=dim_date_path,
+            dim_medicine_path=dim_medicine_path,
         )
 
         transformer.run(
-
-            output_path=Path(
-                "data/04_silver/sales/sales_silver.parquet"
-            )
+            output_path=output_path,
         )
 
         log_step(logger, "=" * 70)
@@ -62,5 +73,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-
     main()

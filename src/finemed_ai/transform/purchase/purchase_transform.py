@@ -11,6 +11,10 @@ from finemed_ai.transform.common.helper_functions import (
     log_step,
     log_dataframe_info,
     validate_dataframe_not_empty,
+    trim_whitespace,
+    normalize_text,
+    fill_missing_text,
+    fill_missing_numeric
 )
 
 from finemed_ai.transform.common.joins import (
@@ -28,7 +32,6 @@ class PurchaseTransformer:
         dim_medicine_path: Path,
         dim_date_path: Path,
     ) -> None:
-
         self.fact_purchase_header_path = fact_purchase_header_path
         self.fact_purchase_line_path = fact_purchase_line_path
 
@@ -45,9 +48,9 @@ class PurchaseTransformer:
 
         self.purchase_df: pd.DataFrame | None = None
 
-     # Load Warehouse Tables
-     def load_data(self) -> None:
+    # Load Warehouse Tables
 
+    def load_data(self) -> None:
         log_step(logger, "Loading Purchase Warehouse Tables...")
 
         self.purchase_header_df = load_parquet(
@@ -98,10 +101,10 @@ class PurchaseTransformer:
             self.purchase_line_df,
             "Fact Purchase Line",
         )
+
     # Join Dimension Tables
 
     def join_dimensions(self) -> None:
-
         log_step(logger, "Joining Purchase Header and Purchase Line...")
 
         self.purchase_df = merge_dimension(
@@ -137,28 +140,168 @@ class PurchaseTransformer:
             fact_key="Date_ID",
             dimension_key="Date_ID",
         )
-    # Cleaning
-    def clean_data(self) -> None:
 
-        log_step(logger, "Cleaning Purchase Dataset...")
+    # Cleaning
+
+    def clean_data(self) -> None:
+        log_step(
+            logger,
+            "Cleaning Purchase Dataset...",
+        )
+
+        validate_dataframe_not_empty(
+            self.purchase_df,
+        )
+
+        # Trim Whitespace
+
+        trim_whitespace(
+            self.purchase_df,
+            columns=[
+                "Invoice_Number",
+                "Supplier_Name",
+                "Medicine_Name",
+                "Batch_Number",
+                "Purchase_Type",
+            ],
+        )
+
+        # Normalize Text
+
+        normalize_text(
+            self.purchase_df,
+            columns=[
+                "Supplier_Name",
+                "Medicine_Name",
+                "Purchase_Type",
+            ],
+        )
+
+        # Fill Missing Text Values
+
+        fill_missing_text(
+            self.purchase_df,
+            columns=[
+                "Supplier_Name",
+                "Medicine_Name",
+                "Purchase_Type",
+            ],
+        )
+
+        # Fill Missing Numeric Values
+
+        fill_missing_numeric(
+            self.purchase_df,
+            columns=[
+                "Purchase_Quantity",
+                "Unit_Cost",
+                "Purchase_Amount",
+            ],
+        )
+
+        # Remove Invalid Purchase Records
+
+        self.purchase_df = self.purchase_df[
+            (self.purchase_df["Purchase_Quantity"] > 0)
+            & (self.purchase_df["Unit_Cost"] > 0)
+            & (self.purchase_df["Purchase_Amount"] > 0)
+        ]
+
+        logger.info("Purchase cleaning completed.")
+
+        log_dataframe_info(
+            logger,
+            self.purchase_df,
+            "Purchase Silver",
+        )
 
     # Business Transformations
+
     def business_transformations(self) -> None:
+        log_step(
+            logger,
+            "Creating Purchase Business Columns...",
+        )
 
-        log_step(logger, "Creating Purchase Business Columns...")
+        validate_dataframe_not_empty(
+            self.purchase_df,
+        )
 
-    # Feature Engineering
-    def feature_engineering(self) -> None:
+        # Purchase Value
 
-        log_step(logger, "Creating Purchase ML Features...")
+        self.purchase_df["Purchase_Value"] = (
+            self.purchase_df["Purchase_Quantity"]
+            * self.purchase_df["Unit_Cost"]
+        )
+
+        # Unit Price Category
+
+        self.purchase_df["Price_Category"] = (
+            pd.cut(
+                self.purchase_df["Unit_Cost"],
+                bins=[
+                    0,
+                    100,
+                    500,
+                    1000,
+                    float("inf"),
+                ],
+                labels=[
+                    "LOW",
+                    "MEDIUM",
+                    "HIGH",
+                    "PREMIUM",
+                ],
+            ).astype(str)
+        )
+
+        # Large Purchase Flag
+
+        self.purchase_df["Large_Purchase_Flag"] = (
+            self.purchase_df["Purchase_Value"] >= 10000
+        )
+
+        # Purchase Size
+
+        self.purchase_df["Purchase_Size"] = (
+            pd.cut(
+                self.purchase_df["Purchase_Quantity"],
+                bins=[
+                    0,
+                    10,
+                    50,
+                    100,
+                    float("inf"),
+                ],
+                labels=[
+                    "SMALL",
+                    "MEDIUM",
+                    "LARGE",
+                    "BULK",
+                ],
+            ).astype(str)
+        )
+
+        logger.info(
+            "Purchase business transformations completed."
+        )
+
+        log_dataframe_info(
+            logger,
+            self.purchase_df,
+            "Purchase Silver",
+        )
 
     # Save Silver Dataset
+
     def save(
         self,
         output_path: Path,
     ) -> None:
-
-        log_step(logger, "Saving Purchase Silver Dataset...")
+        log_step(
+            logger,
+            "Saving Purchase Silver Dataset...",
+        )
 
         save_parquet(
             self.purchase_df,
@@ -166,18 +309,33 @@ class PurchaseTransformer:
             logger,
         )
 
+        logger.info(
+            "Purchase Silver Dataset saved successfully."
+        )
+
     # Pipeline
-    def run(self,output_path: Path) -> None:
 
-        self.load_data()
+    def run(
+        self,
+        output_path: Path,
+    ) -> None:
+        try:
+            self.load_data()
 
-        self.join_dimensions()
+            self.join_dimensions()
 
-        self.clean_data()
+            self.clean_data()
 
-        self.business_transformations()
+            self.business_transformations()
 
-        self.feature_engineering()
+            self.save(output_path)
 
-        self.save(output_path)
+            logger.info(
+                "Purchase Transformation Completed Successfully."
+            )
 
+        except Exception:
+            logger.exception(
+                "Purchase Transformation Failed."
+            )
+            raise

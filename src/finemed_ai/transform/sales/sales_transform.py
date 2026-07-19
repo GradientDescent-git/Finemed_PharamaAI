@@ -11,6 +11,11 @@ from finemed_ai.transform.common.helper_functions import (
     log_step,
     log_dataframe_info,
     validate_dataframe_not_empty,
+    validate_dataframe_not_empty,
+    trim_whitespace,
+    normalize_text,
+    fill_missing_numeric,
+    fill_missing_text,
 )
 
 from finemed_ai.transform.common.joins import (
@@ -21,19 +26,8 @@ from finemed_ai.transform.common.joins import (
 
 logger = get_logger(__name__)
 
-
 class SalesTransformer:
-    """
-    Sales Silver Layer Transformer.
-
-    Responsibilities
-    ----------------
-    1. Load warehouse tables
-    2. Join dimensions
-    3. Clean data
-    4. Apply business transformations
-    5. Save Silver dataset
-    """
+    """Sales Silver Layer Transformer."""
 
     def __init__(
         self,
@@ -42,7 +36,6 @@ class SalesTransformer:
         dim_date_path: Path,
         dim_medicine_path: Path,
     ) -> None:
-
         self.fact_sales_path = fact_sales_path
         self.dim_customer_path = dim_customer_path
         self.dim_date_path = dim_date_path
@@ -53,12 +46,9 @@ class SalesTransformer:
         self.date_df: pd.DataFrame | None = None
         self.medicine_df: pd.DataFrame | None = None
 
-    # ---------------------------------------------------------
     # Load Warehouse Tables
-    # ---------------------------------------------------------
 
     def load_data(self) -> None:
-
         log_step(
             logger,
             "Loading Sales Warehouse Tables...",
@@ -96,12 +86,9 @@ class SalesTransformer:
             "Fact Sales",
         )
 
-    # ---------------------------------------------------------
     # Join Dimension Tables
-    # ---------------------------------------------------------
 
     def join_dimensions(self) -> None:
-
         log_step(
             logger,
             "Joining Customer Dimension...",
@@ -154,67 +141,164 @@ class SalesTransformer:
             "All dimension tables joined successfully."
         )
 
-    # ---------------------------------------------------------
     # Cleaning
-    # ---------------------------------------------------------
 
     def clean_data(self) -> None:
-
         log_step(
             logger,
             "Cleaning Sales Dataset...",
         )
 
-        # Future Cleaning Rules
-        # ---------------------
-        # Trim whitespace
-        # Fill missing values
-        # Normalize text
-        # Remove duplicates
-        # Validate IDs
-        # Remove invalid records
+        validate_dataframe_not_empty(
+            self.sales_df,
+            logger,
+            "Sales Dataset",
+        )
+
+        # Trim whitespace from text columns
+
+        text_columns = [
+            column
+            for column in self.sales_df.select_dtypes(
+                include="object"
+            ).columns
+        ]
+
+        if text_columns:
+            self.sales_df = trim_whitespace(
+                self.sales_df,
+                text_columns,
+                logger,
+            )
+
+            self.sales_df = normalize_text(
+                self.sales_df,
+                text_columns,
+                logger,
+            )
+
+        # Fill missing numeric values
+
+        numeric_columns = [
+            column
+            for column in self.sales_df.select_dtypes(
+                include="number"
+            ).columns
+        ]
+
+        if numeric_columns:
+            self.sales_df = fill_missing_numeric(
+                self.sales_df,
+                numeric_columns,
+                logger,
+            )
+
+        # Fill missing text values
+
+        if text_columns:
+            self.sales_df = fill_missing_text(
+                self.sales_df,
+                text_columns,
+                logger,
+            )
+
+        # Remove duplicate records
+
+        duplicate_count = self.sales_df.duplicated().sum()
+
+        if duplicate_count > 0:
+            logger.info(
+                "Removing %d duplicate records.",
+                duplicate_count,
+            )
+
+            self.sales_df = (
+                self.sales_df
+                .drop_duplicates()
+                .reset_index(drop=True)
+            )
 
         logger.info(
             "Sales cleaning completed."
         )
 
-    # ---------------------------------------------------------
     # Business Transformations
-    # ---------------------------------------------------------
 
     def business_transformations(self) -> None:
-
         log_step(
             logger,
             "Creating Sales Business Columns...",
         )
 
-        # Future Business KPIs
-        # --------------------
-        # Total Sales
+        validate_dataframe_not_empty(
+            self.sales_df,
+            logger,
+            "Sales Dataset",
+        )
+
         # Discount Amount
-        # Net Sales
+
+        if {
+            "Gross_Amount",
+            "Net_Amount",
+        }.issubset(self.sales_df.columns):
+
+            self.sales_df["Discount_Amount"] = (
+                self.sales_df["Gross_Amount"]
+                - self.sales_df["Net_Amount"]
+            )
+
         # Profit
-        # Sales Category
-        # Return Flag
+
+        if {
+            "Net_Amount",
+            "Cost_Amount",
+        }.issubset(self.sales_df.columns):
+
+            self.sales_df["Profit"] = (
+                self.sales_df["Net_Amount"]
+                - self.sales_df["Cost_Amount"]
+            )
+
         # High Value Order Flag
+
+        if "Net_Amount" in self.sales_df.columns:
+            average_order = (
+                self.sales_df["Net_Amount"]
+                .mean()
+            )
+
+            self.sales_df["High_Value_Order_Flag"] = (
+                self.sales_df["Net_Amount"]
+                >= average_order
+            )
+
+        # Return Flag
+
+        if "Quantity" in self.sales_df.columns:
+            self.sales_df["Return_Flag"] = (
+                self.sales_df["Quantity"] < 0
+            )
 
         logger.info(
             "Sales business transformations completed."
         )
 
-    # ---------------------------------------------------------
     # Save Silver Dataset
-    # ---------------------------------------------------------
 
     def save(
         self,
         output_path: Path,
     ) -> None:
-
         log_step(
             logger,
             "Saving Sales Silver Dataset...",
+        )
+
+        validate_dataframe_not_empty(
+            self.sales_df,
+            logger,
+            "Sales Silver Dataset",
         )
 
         save_parquet(
@@ -227,17 +311,13 @@ class SalesTransformer:
             "Sales Silver Dataset saved successfully."
         )
 
-    # ---------------------------------------------------------
     # Pipeline
-    # ---------------------------------------------------------
 
     def run(
         self,
         output_path: Path,
     ) -> None:
-
         try:
-
             self.load_data()
 
             self.join_dimensions()
@@ -253,9 +333,7 @@ class SalesTransformer:
             )
 
         except Exception:
-
             logger.exception(
                 "Sales Transformation Failed."
             )
-
             raise
