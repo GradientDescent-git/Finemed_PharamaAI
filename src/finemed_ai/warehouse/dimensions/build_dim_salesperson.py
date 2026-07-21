@@ -17,7 +17,7 @@ def build_dim_salesperson(
     try:
 
         table_name = "SFILE.DAT"
-
+        
         if table_name not in tables:
             raise KeyError(
                 f"{table_name} not found in extracted tables."

@@ -1,47 +1,75 @@
+from __future__ import annotations
+
+import logging
+
 from finemed_ai.config.paths import RAW_DATA_DIR
 from finemed_ai.extract.read_dat import read_all_months
-from finemed_ai.validation.run_validation import run_all_validations
-from finemed_ai.validation.validation_config import REQUIRED_FILES
-
-print("=" * 80)
-print("RUNNING EXTRACTION")
-print("=" * 80)
-
-tables = read_all_months(
-    RAW_DATA_DIR,
+from finemed_ai.validation.run_validation import (
+    run_all_validations,
+)
+from finemed_ai.validation.validation_config import (
     REQUIRED_FILES,
 )
 
-print("\nExtraction completed.")
 
-print("=" * 80)
-print("RUNNING VALIDATION")
-print("=" * 80)
+def main() -> None:
 
-reports = run_all_validations(tables)
+    logging.basicConfig(
+        level=logging.INFO,
+        format=(
+            "%(asctime)s | "
+            "%(levelname)s | "
+            "%(message)s"
+        ),
+    )
 
-print("\nValidation completed successfully.")
+    # Extract Layer
 
-print("\nGenerated Reports:\n")
+    extracted_tables = read_all_months(
+        raw_data_dir=RAW_DATA_DIR,
+        required_files=REQUIRED_FILES,
+    )
 
-for report_name, report in reports.items():
+    # Validation Layer
 
-    print(f"{report_name}")
+    validation_output = run_all_validations(
+        extracted_tables,
+    )
 
-    if hasattr(report, "shape"):
-        print(report.shape)
+    validated_tables = validation_output["tables"]
+    validation_reports = validation_output["reports"]
 
-    else:
-        print(type(report))
+    print("\n" + "=" * 80)
+    print("VALIDATION COMPLETED")
+    print("=" * 80)
 
-    print("-" * 50)
+    print("\nValidated Tables\n")
 
-print(reports["file_report"].head())
+    for table_name, dataframe in validated_tables.items():
 
-print(reports["schema_report"].head())
+        print(
+            f"{table_name:<20} "
+            f"Rows={len(dataframe):>8} "
+            f"Cols={len(dataframe.columns):>3}"
+        )
 
-print(reports["duplicate_report"])
+    print("\nValidation Reports\n")
 
-print(reports["orphan_report"])
+    for report_name, report in validation_reports.items():
 
-print(reports["profile_report"].head())
+        print(f"{report_name}")
+
+        if hasattr(report, "shape"):
+
+            print(report.head())
+
+        else:
+
+            print(report)
+
+        print("-" * 80)
+
+
+if __name__ == "__main__":
+
+    main()
