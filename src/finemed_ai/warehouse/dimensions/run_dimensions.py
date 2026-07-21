@@ -21,6 +21,11 @@ def run_dimensions(
 
     logger.info("Starting Dimension Layer...")
 
+    logger.info("Available extracted tables:")
+    
+    for key in tables.keys():
+        logger.info(" -> %s", key)
+
     dimensions: dict[str, pd.DataFrame] = {}
 
     try:

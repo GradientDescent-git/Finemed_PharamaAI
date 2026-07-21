@@ -97,8 +97,8 @@ def run_all_validations(
         }
 
         logger.info("Validation layer completed successfully")
-
-        return reports
+        
+        return {"tables": tables,"reports": reports}
 
     except Exception as error:
 
