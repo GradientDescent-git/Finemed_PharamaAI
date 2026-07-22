@@ -1,19 +1,13 @@
 """
 Database configuration for Finemed Pharma AI.
-
-This module stores all PostgreSQL connection settings
-used throughout the application.
 """
 
 from dataclasses import dataclass
+import os
 
 
 @dataclass(frozen=True)
 class DatabaseConfig:
-    """
-    Immutable configuration object for PostgreSQL.
-    """
-
     host: str
     port: int
     database: str
@@ -23,9 +17,10 @@ class DatabaseConfig:
 
 
 DATABASE_CONFIG = DatabaseConfig(
-    host="localhost",
+     host="localhost",
     port=5432,
     database="finemed_aiDB",
     user="postgres",
-    password="Vicky3061@postsql",
-    schema="warehouse")    
+    password=os.getenv("POSTGRES_PASSWORD"),
+    schema="warehouse",
+)
