@@ -4,276 +4,190 @@ from pathlib import Path
 
 import pandas as pd
 
+from finemed_ai.database.warehouse_reader import read_table
+
 from finemed_ai.transform.common.helper_functions import (
     get_logger,
-    load_parquet,
     save_parquet,
     log_step,
     log_dataframe_info,
     validate_dataframe_not_empty,
+    trim_whitespace,
+    normalize_text,
+    fill_missing_text,
 )
 
 logger = get_logger(__name__)
 
 class SupplierTransformer:
-    def __init__(
-        self,
-        supplier_dimension_path: Path,
-    ) -> None:
-        self.supplier_dimension_path = supplier_dimension_path
-
-        self.supplier_df: pd.DataFrame | None = None
+    def __init__(self):
+        self.supplier_df = None
 
     # Load Data
 
     def load_data(self) -> None:
-        log_step(logger, "Loading Supplier Dimension...")
-
-        self.supplier_df = load_parquet(
-            self.supplier_dimension_path,
+        log_step(
             logger,
-        )
-
+            "Loading Supplier Dimension...")
+        
+        self.supplier_df = read_table(
+            table_name="dim_supplier")
+        
         validate_dataframe_not_empty(
             self.supplier_df,
-            "Supplier Dimension",
             logger,
-        )
-
+            "Supplier Dimension")
+        
         log_dataframe_info(
             logger,
             self.supplier_df,
-            "Supplier Dimension",
-        )
+            "Supplier Dimension")
 
     # Cleaning
 
     def clean_data(self) -> None:
         log_step(
             logger,
-            "Cleaning Supplier Dataset...",
-        )
+            "Cleaning Supplier Dataset...")
+        
+        if self.supplier_df is None:
+            raise ValueError("Supplier dataframe is not loaded.")
+        
+        validate_dataframe_not_empty(
+            self.supplier_df,
+            logger,
+            "Supplier Dataset")
+        
+        # Trim Whitespace
+        trim_whitespace(
+            self.supplier_df,
+            columns=[
+                "SUPNAME",
+                "SUPCODE",
+                "RNAME",
+                "RADD1",
+                "RADD2",
+                "RADD3",
+                "RADD4",
+                "RPHON"],logger=logger)
+        
+        # Normalize Text
+        normalize_text(
+            self.supplier_df,
+            columns=[
+                "SUPNAME",
+                "SUPCODE",
+                "RNAME"],logger=logger)
+        
+        # Fill Missing Text
+        fill_missing_text(
+            self.supplier_df,
+            columns=[
+                "SUPNAME",
+                "SUPCODE",
+                "RNAME",
+                "RADD1",
+                "RADD2",
+                "RADD3",
+                "RADD4",
+                "RPHON",
+                ],logger=logger)
+        
+        # Remove Duplicate Suppliers
+        before = len(self.supplier_df)
+        
+        self.supplier_df = (self.supplier_df.drop_duplicates(subset=["SUPNO"]).reset_index(drop=True))
+        
+        removed = before - len(self.supplier_df)
+        logger.info("Duplicate supplier rows removed: %d",removed)
+        
+        validate_dataframe_not_empty(
+            self.supplier_df,
+            logger,
+            "Supplier Silver")
+        
+        log_dataframe_info(
+            logger,
+            self.supplier_df,
+            "Supplier Silver")
+        logger.info(
+            "Supplier cleaning completed successfully.")
+        
+    #Business Transformation
 
-        # Trim whitespace
-
-        text_columns = [
-            "SUPNAME",
-            "SUPCODE",
-            "RNAME",
+    def business_transformations(self) -> None:
+        if self.supplier_df is None:
+            raise ValueError("Supplier dataframe is not loaded.")
+        log_step(
+            logger,
+            "Creating Supplier Business Columns...")
+        
+        # Supplier Display Name
+        if {"SUPCODE", "SUPNAME"}.issubset(self.supplier_df.columns):
+            self.supplier_df["Supplier_Display"] = (self.supplier_df["SUPCODE"].astype(str)
+                                                    + " - "
+                                                    + self.supplier_df["SUPNAME"].astype(str))
+        
+        # Contact Availability Flag
+        if "RPHON" in self.supplier_df.columns:
+            self.supplier_df["Has_Contact"] = (
+                self.supplier_df["RPHON"].fillna("").astype(str).str.strip().ne(""))
+            
+        # Full Supplier Address
+        address_columns = [
             "RADD1",
             "RADD2",
             "RADD3",
-            "RADD4",
-            "RPHON",
-        ]
-
-        existing_text_columns = [
-            column
-            for column in text_columns
-            if column in self.supplier_df.columns
-        ]
-
-        if existing_text_columns:
-            self.supplier_df = trim_whitespace(
-                self.supplier_df,
-                existing_text_columns,
-                logger,
-            )
-
-        # Normalize text
-
-        if existing_text_columns:
-            self.supplier_df = normalize_text(
-                self.supplier_df,
-                existing_text_columns,
-                logger,
-            )
-
-        # Fill missing text values
-
-        if existing_text_columns:
-            self.supplier_df = fill_missing_text(
-                self.supplier_df,
-                existing_text_columns,
-                logger,
-                value="UNKNOWN",
-            )
-
-        # Fill missing numeric values
-
-        numeric_columns = [
-            column
-            for column in self.supplier_df.columns
-            if pd.api.types.is_numeric_dtype(
-                self.supplier_df[column]
-            )
-        ]
-
-        if numeric_columns:
-            self.supplier_df = fill_missing_numeric(
-                self.supplier_df,
-                numeric_columns,
-                logger,
-                value=0,
-            )
-
-        # Remove duplicate suppliers
-
-        before = len(self.supplier_df)
-
-        self.supplier_df = (
-            self.supplier_df
-            .drop_duplicates(
-                subset=["SUPNO"],
-            )
-            .reset_index(drop=True)
-        )
-
-        removed = before - len(self.supplier_df)
-
+            "RADD4"]
+        
+        existing_columns = [
+            col for col in address_columns
+            if col in self.supplier_df.columns]
+        
+        if existing_columns:
+            self.supplier_df["Supplier_Address"] = (
+                self.supplier_df[existing_columns].fillna("").astype(str).agg(", ".join, axis=1).str.replace(r"(,\s*)+", ", ", regex=True).str.strip(", "))
+        
         logger.info(
-            "Removed %d duplicate suppliers.",
-            removed,
-        )
-
-        # Validate supplier key
-
-        validate_no_duplicate_keys(
+            "Supplier business transformations completed successfully.")
+        
+        log_dataframe_info(
+            logger,
             self.supplier_df,
-            ["SUPNO"],
-            logger,
-            "Supplier Dimension",
-        )
-
-        logger.info(
-            "Supplier cleaning completed.",
-        )
-
-    # Business Transformations
-
-    def business_transformations(self) -> None:
-        log_step(
-            logger,
-            "Creating Supplier Business Columns...",
-        )
-
-        # Total Purchase Value
-
-        if {
-            "YPURVAL",
-            "MPURVAL",
-        }.issubset(self.supplier_df.columns):
-
-            self.supplier_df["Total_Purchase_Value"] = (
-                self.supplier_df["YPURVAL"]
-                + self.supplier_df["MPURVAL"]
-            )
-
-        # Total Sales Value
-
-        if {
-            "YRSAL",
-            "MRSAL",
-        }.issubset(self.supplier_df.columns):
-
-            self.supplier_df["Total_Sales_Value"] = (
-                self.supplier_df["YRSAL"]
-                + self.supplier_df["MRSAL"]
-            )
-
-        # Total Returns
-
-        if {
-            "YPURRET",
-            "YRRET",
-        }.issubset(self.supplier_df.columns):
-
-            self.supplier_df["Total_Return_Value"] = (
-                self.supplier_df["YPURRET"]
-                + self.supplier_df["YRRET"]
-            )
-
-        # Active Supplier Flag
-
-        if "Total_Purchase_Value" in self.supplier_df.columns:
-
-            self.supplier_df["Is_Active_Supplier"] = (
-                self.supplier_df["Total_Purchase_Value"] > 0
-            )
-
-        # High Value Supplier
-
-        if "Total_Purchase_Value" in self.supplier_df.columns:
-
-            threshold = (
-                self.supplier_df["Total_Purchase_Value"]
-                .quantile(0.90)
-            )
-
-            self.supplier_df["High_Value_Supplier"] = (
-                self.supplier_df["Total_Purchase_Value"]
-                >= threshold
-            )
-
-        # Supplier Category
-
-        if "Total_Purchase_Value" in self.supplier_df.columns:
-
-            self.supplier_df["Supplier_Category"] = pd.cut(
-                self.supplier_df["Total_Purchase_Value"],
-                bins=[
-                    -1,
-                    0,
-                    10000,
-                    100000,
-                    float("inf"),
-                ],
-                labels=[
-                    "INACTIVE",
-                    "LOW",
-                    "MEDIUM",
-                    "HIGH",
-                ],
-            )
-
-        logger.info(
-            "Supplier business transformations completed.",
-        )
-
+            "Supplier Silver")
+        
     # Save Silver Dataset
-
     def save(
-        self,
-        output_path: Path,
-    ) -> None:
+            self,
+            output_path: Path) -> None:
         log_step(
             logger,
-            "Saving Supplier Silver Dataset...",
-        )
-
+            "Saving Supplier Silver Dataset...")
+        
+        validate_dataframe_not_empty(
+            self.supplier_df,
+            logger,
+            "Supplier Silver Dataset")
+        
         save_parquet(
             self.supplier_df,
             output_path,
-            logger,
-        )
-
+            logger)
+        
         logger.info(
-            "Supplier Silver Dataset saved successfully."
-        )
+            "Supplier Silver Dataset saved successfully.")
 
     # Pipeline
-
-    def run(
-        self,
-        output_path: Path,
-    ) -> None:
+    def run(self,output_path: Path) -> None:
         try:
+            log_step(
+                logger,
+                "Starting Supplier Silver Transformation..."
+                )
+            
             self.load_data()
-
             self.clean_data()
-
             self.business_transformations()
-
             self.save(output_path)
 
             logger.info(

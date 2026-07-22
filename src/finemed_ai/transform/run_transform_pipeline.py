@@ -5,7 +5,6 @@ from finemed_ai.transform.common.helper_functions import (
     log_step,
 )
 
-
 from finemed_ai.transform.inventory.run_inventory import (
     main as run_inventory,
 )
@@ -37,14 +36,15 @@ def main() -> None:
         log_step(logger, "Starting Silver Layer Transformation Pipeline")
         log_step(logger, "=" * 80)
 
+        # Master Dimensions
         run_medicine()
-
         run_supplier()
 
+        # Inventory
         run_inventory()
 
+        # Transactional Data
         run_purchase()
-
         run_sales()
 
         log_step(logger, "=" * 80)
@@ -59,10 +59,8 @@ def main() -> None:
         logger.exception(
             "Silver Layer Transformation Pipeline Failed."
         )
-
         raise
 
 
 if __name__ == "__main__":
-
     main()

@@ -4,9 +4,9 @@ from pathlib import Path
 
 import pandas as pd
 
+from finemed_ai.database.warehouse_reader import read_table
 from finemed_ai.transform.common.helper_functions import (
     get_logger,
-    load_parquet,
     save_parquet,
     log_step,
     log_dataframe_info,
@@ -17,8 +17,7 @@ from finemed_ai.transform.common.helper_functions import (
     fill_missing_text,
     fill_missing_boolean,
     round_numeric_columns,
-    convert_to_datetime,
-)
+    convert_to_datetime)
 
 from finemed_ai.transform.common.joins import (
     merge_dimension,
@@ -29,16 +28,8 @@ logger = get_logger(__name__)
 
 class InventoryTransformer:
 
-    def __init__(
-        self,
-        inventory_fact_path: Path,
-        medicine_dimension_path: Path,
-        date_dimension_path: Path) -> None:
-
-        self.inventory_fact_path = inventory_fact_path
-        self.medicine_dimension_path = medicine_dimension_path
-        self.date_dimension_path = date_dimension_path
-
+    def __init__(self) -> None:
+        
         self.inventory_df: pd.DataFrame | None = None
         self.medicine_df: pd.DataFrame | None = None
         self.date_df: pd.DataFrame | None = None
@@ -52,20 +43,11 @@ class InventoryTransformer:
             "Loading Inventory Warehouse Tables...",
         )
 
-        self.inventory_df = load_parquet(
-            self.inventory_fact_path,
-            logger,
-        )
+        self.inventory_df = read_table(table_name="fact_purchase_line")
+        
+        self.medicine_df = read_table(table_name="dim_product")
+        self.date_df = read_table(table_name="dim_date")
 
-        self.medicine_df = load_parquet(
-            self.medicine_dimension_path,
-            logger,
-        )
-
-        self.date_df = load_parquet(
-            self.date_dimension_path,
-            logger,
-        )
 
         validate_dataframe_not_empty(
             self.inventory_df,
@@ -124,9 +106,8 @@ class InventoryTransformer:
         self.inventory_df = merge_dimension(
             self.inventory_df,
             self.medicine_df,
-            fact_key="Medicine_ID",
-            dimension_key="Medicine_ID",
-        )
+            fact_key="MDCODE",
+            dimension_key="MDCODE")
 
         log_step(
             logger,
@@ -136,9 +117,8 @@ class InventoryTransformer:
         self.inventory_df = merge_dimension(
             self.inventory_df,
             self.date_df,
-            fact_key="Date_ID",
-            dimension_key="Date_ID",
-        )
+            fact_key="EXP",
+            dimension_key="full_date")
 
         logger.info(
             "Dimension joins completed successfully."
@@ -160,20 +140,18 @@ class InventoryTransformer:
         trim_whitespace(
             self.inventory_df,
             columns=[
-                "Medicine_Name",
-                "Company_Name",
-                "Batch_No",
-            ],
-            logger=logger,
-        )
+                "MDNAME",
+                "SUPCODE",
+                "BAT" ],
+            logger=logger)
 
         # 2. Normalize text
 
         normalize_text(
             self.inventory_df,
             columns=[
-                "Medicine_Name",
-                "Company_Name",
+                "MDNAME",
+                "SUPCODE",
             ],
             logger=logger,
         )
@@ -182,7 +160,7 @@ class InventoryTransformer:
 
         convert_to_datetime(
             self.inventory_df,
-            column="Expiry_Date",
+            column="EXP",
             logger=logger,
         )
 
@@ -191,7 +169,7 @@ class InventoryTransformer:
         fill_missing_text(
             self.inventory_df,
             columns=[
-                "Company_Name",
+                "SUPCODE",
             ],
             logger=logger,
         )
@@ -201,8 +179,8 @@ class InventoryTransformer:
         fill_missing_numeric(
             self.inventory_df,
             columns=[
-                "Stock_Qty",
-                "Purchase_Rate",
+                "SOH",
+                "PRATE",
                 "MRP",
             ],
             logger=logger,
@@ -265,11 +243,7 @@ class InventoryTransformer:
         # Expiry Date
 
         if "EXP" in self.inventory_df.columns:
-
-            self.inventory_df["Expiry_Date"] = pd.to_datetime(
-                self.inventory_df["EXP"],
-                errors="coerce",
-            )
+            self.inventory_df["Expiry_Date"] = self.inventory_df["EXP"]
 
         # Days Until Expiry
 

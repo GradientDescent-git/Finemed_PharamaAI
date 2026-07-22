@@ -22,22 +22,19 @@ def main() -> None:
         log_step(logger, "Starting Supplier Silver Layer Pipeline")
         log_step(logger, "=" * 70)
 
-        # Warehouse Input
-        supplier_dimension_path = Path(
-            "data/03_warehouse/dimensions/dim_supplier.parquet"
-        )
-
         # Silver Output
+
         output_path = Path(
             "data/04_silver/supplier/supplier_silver.parquet"
         )
 
         # Execute Pipeline
-        transformer = SupplierTransformer(
-            supplier_dimension_path=supplier_dimension_path,
-        )
 
-        transformer.run(output_path)
+        transformer = SupplierTransformer()
+
+        transformer.run(
+            output_path=output_path,
+        )
 
         log_step(logger, "=" * 70)
         log_step(logger, "Supplier Silver Layer Completed Successfully")

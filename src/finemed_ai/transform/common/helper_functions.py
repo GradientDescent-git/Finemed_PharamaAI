@@ -145,7 +145,7 @@ def save_csv(dataframe: pd.DataFrame,file_path: Path,logger: logging.Logger,inde
     )
 
 # Validation Utilities
-def validate_dataframe_not_empty(df: pd.DataFrame,logger: logging.Logger,df_name: str = "DataFrame") -> None:
+def validate_dataframe_not_empty(df, logger, df_name):
     if df.empty:
         logger.error("%s is empty.", df_name)
         raise ValueError(f"{df_name} is empty.")
@@ -434,6 +434,15 @@ def trim_whitespace(
     )
 
     for column in columns:
+
+        # Skip non-string columns
+        if not (
+            pd.api.types.is_string_dtype(df[column])
+            or df[column].dtype == "object"
+        ):
+            logger.debug("Skipping non-text column: %s", column)
+            continue
+
         mask = df[column].notna()
 
         df.loc[mask, column] = (
