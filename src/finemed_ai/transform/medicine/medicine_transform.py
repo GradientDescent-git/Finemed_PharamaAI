@@ -4,14 +4,14 @@ from pathlib import Path
 
 import pandas as pd
 
+from finemed_ai.database.warehouse_reader import read_table
+
 from finemed_ai.transform.common.helper_functions import (
     get_logger,
-    load_parquet,
     save_parquet,
     log_step,
     log_dataframe_info,
     validate_dataframe_not_empty,
-    log_step,
     trim_whitespace,
     normalize_text,
     fill_missing_text,
@@ -23,29 +23,22 @@ logger = get_logger(__name__)
 
 
 class MedicineTransformer:
-    def __init__(
-        self,
-        medicine_dimension_path: Path,
-    ) -> None:
-        self.medicine_dimension_path = medicine_dimension_path
-
+    def __init__(self) -> None:
+        
         self.medicine_df: pd.DataFrame | None = None
-
+    
     # Load Data
 
     def load_data(self) -> None:
         log_step(logger, "Loading Medicine Dimension...")
 
-        self.medicine_df = load_parquet(
-            self.medicine_dimension_path,
-            logger,
-        )
-
+        self.medicine_df = read_table(
+            table_name="dim_product")
+        
         validate_dataframe_not_empty(
             self.medicine_df,
-            "Medicine Dimension",
             logger,
-        )
+            "Medicine Dimension")
 
         log_dataframe_info(
             logger,
@@ -66,12 +59,11 @@ class MedicineTransformer:
         trim_whitespace(
             self.medicine_df,
             columns=[
-                "Medicine_Name",
-                "Company_Name",
-                "Medicine_Type",
-                "Medicine_Category",
-                "Unit",
-            ],
+                "MDNAME",
+                "SUPCODE",
+                "PACKG",
+                "DETAIL",
+                "UQC"],
             logger=logger,
         )
 
@@ -80,12 +72,11 @@ class MedicineTransformer:
         normalize_text(
             self.medicine_df,
             columns=[
-                "Medicine_Name",
-                "Company_Name",
-                "Medicine_Type",
-                "Medicine_Category",
-                "Unit",
-            ],
+                "MDNAME",
+                "SUPCODE",
+                "PACKG",
+                "DETAIL",
+                "UQC"],
             logger=logger,
         )
 
@@ -94,10 +85,9 @@ class MedicineTransformer:
         fill_missing_text(
             self.medicine_df,
             columns=[
-                "Medicine_Type",
-                "Medicine_Category",
-                "Unit",
-            ],
+                "PACKG",
+                "DETAIL",
+                "UQC"],
             logger=logger,
             value="UNKNOWN",
         )
@@ -106,7 +96,7 @@ class MedicineTransformer:
 
         validate_no_duplicate_keys(
             self.medicine_df,
-            key_columns=["Medicine_ID"],
+            key_columns=["MDCODE"],
             logger=logger,
             df_name="Medicine Dimension",
         )
@@ -116,8 +106,8 @@ class MedicineTransformer:
         validate_no_nulls(
             self.medicine_df,
             columns=[
-                "Medicine_ID",
-                "Medicine_Name",
+                "MDCODE",
+                "MDNAME",
             ],
             logger=logger,
             df_name="Medicine Dimension",
@@ -128,63 +118,56 @@ class MedicineTransformer:
     # Business Transformations
 
     def business_transformations(self) -> None:
-        log_step(logger, "Creating Medicine Business Columns...")
-
         if self.medicine_df is None:
             raise ValueError("Medicine dataframe is not loaded.")
-
-        # Inventory Value
-
-        if {"Current_Stock", "Purchase_Rate"}.issubset(self.medicine_df.columns):
-            self.medicine_df["Inventory_Value"] = (
-                self.medicine_df["Current_Stock"]
-                * self.medicine_df["Purchase_Rate"]
-            )
-
-        # Stock Status
-
-        if {"Current_Stock", "Reorder_Level"}.issubset(self.medicine_df.columns):
-            self.medicine_df["Stock_Status"] = "IN_STOCK"
-
-            self.medicine_df.loc[
-                self.medicine_df["Current_Stock"] <= 0,
-                "Stock_Status",
-            ] = "OUT_OF_STOCK"
-
-            self.medicine_df.loc[
-                (
-                    self.medicine_df["Current_Stock"] > 0
-                )
-                & (
-                    self.medicine_df["Current_Stock"]
-                    <= self.medicine_df["Reorder_Level"]
-                ),
-                "Stock_Status",
-            ] = "LOW_STOCK"
-
-        # Reorder Flag
-
-        if {
-            "Current_Stock",
-            "Reorder_Level",
-        }.issubset(self.medicine_df.columns):
-
-            self.medicine_df["Reorder_Flag"] = (
-                self.medicine_df["Current_Stock"]
-                <= self.medicine_df["Reorder_Level"]
-            )
-
-        # Expiry Flag
-
-        if "Expiry_Date" in self.medicine_df.columns:
-            self.medicine_df["Expired_Flag"] = (
-                self.medicine_df["Expiry_Date"]
-                < pd.Timestamp.today().normalize()
-            )
-
+        
+        log_step(
+            logger,
+            "Creating Medicine Business Columns...")
+        
+        # Convert date columns
+        if "NEWDT" in self.medicine_df.columns:
+            self.medicine_df["NEWDT"] = pd.to_datetime(
+                self.medicine_df["NEWDT"],
+                errors="coerce")
+            
+        if "SMDT" in self.medicine_df.columns:
+            self.medicine_df["SMDT"] = pd.to_datetime(
+                self.medicine_df["SMDT"],
+                errors="coerce")
+            
+        # Product Display Name
+        if {"MDNAME", "PACKG"}.issubset(self.medicine_df.columns):
+            self.medicine_df["Product_Display_Name"] = (
+                self.medicine_df["MDNAME"].fillna("")
+                + " "
+                + self.medicine_df["PACKG"].fillna("")).str.strip()
+            
+        # Product Age
+        if "NEWDT" in self.medicine_df.columns:
+            today = pd.Timestamp.today().normalize()
+            self.medicine_df["Product_Age_Days"] = (
+                today - self.medicine_df["NEWDT"]).dt.days
+            
+        # Product Status
+        if "SMDT" in self.medicine_df.columns:
+            self.medicine_df["Product_Status"] = (
+                self.medicine_df["SMDT"].notna().map({
+                    True: "ACTIVE",
+                    False: "INACTIVE"}))
+            
+        # Supplier Available
+        if "SUPCODE" in self.medicine_df.columns:
+            self.medicine_df["Supplier_Available"] = (
+                self.medicine_df["SUPCODE"].fillna("").ne(""))
+            
+        # HSN Available
+        if "HSN" in self.medicine_df.columns:
+            self.medicine_df["HSN_Available"] = (
+                self.medicine_df["HSN"].notna())
+            
         logger.info(
-            "Medicine business transformations completed."
-        )
+            "Medicine business transformations completed successfully.")
 
     # Save Silver Dataset
 

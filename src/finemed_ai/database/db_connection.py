@@ -4,10 +4,10 @@ Database connection utilities for Finemed Pharma AI.
 
 from __future__ import annotations
 
-import psycopg2
-from psycopg2.extensions import connection
 from urllib.parse import quote_plus
 
+import psycopg2
+from psycopg2.extensions import connection
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
 
@@ -20,45 +20,38 @@ logger = get_logger(__name__)
 def get_engine() -> Engine:
     """
     Create and return a reusable SQLAlchemy Engine.
-
-    This engine is used by pandas for reading and
-    writing DataFrames to PostgreSQL.
     """
 
     try:
-
-        # Encode password so special characters like @ work correctly
         encoded_password = quote_plus(DATABASE_CONFIG.password)
 
-        engine = create_engine(
+        database_url = (
             f"postgresql+psycopg2://"
             f"{DATABASE_CONFIG.user}:"
             f"{encoded_password}@"
             f"{DATABASE_CONFIG.host}:"
             f"{DATABASE_CONFIG.port}/"
-            f"{DATABASE_CONFIG.database}",
+            f"{DATABASE_CONFIG.database}"
+        )
+
+        engine = create_engine(
+            database_url,
             future=True,
             pool_pre_ping=True,
         )
 
-        logger.info(
-            "SQLAlchemy Engine created successfully."
-        )
+        logger.info("SQLAlchemy Engine created successfully.")
 
         return engine
 
     except Exception:
-
-        logger.exception(
-            "Failed to create SQLAlchemy Engine."
-        )
-
+        logger.exception("Failed to create SQLAlchemy Engine.")
         raise
 
 
 def get_connection() -> connection:
     """
-    Create and return a PostgreSQL database connection.
+    Create and return a PostgreSQL connection.
     """
 
     logger.info(
@@ -67,7 +60,6 @@ def get_connection() -> connection:
     )
 
     try:
-
         conn = psycopg2.connect(
             host=DATABASE_CONFIG.host,
             port=DATABASE_CONFIG.port,
@@ -76,18 +68,12 @@ def get_connection() -> connection:
             password=DATABASE_CONFIG.password,
         )
 
-        logger.info(
-            "Database connection established successfully."
-        )
+        logger.info("Database connection established successfully.")
 
         return conn
 
     except Exception:
-
-        logger.exception(
-            "Failed to connect to PostgreSQL."
-        )
-
+        logger.exception("Failed to connect to PostgreSQL.")
         raise
 
 
@@ -97,9 +83,5 @@ def close_connection(conn: connection) -> None:
     """
 
     if conn is not None:
-
         conn.close()
-
-        logger.info(
-            "Database connection closed."
-        )
+        logger.info("Database connection closed.")

@@ -7,13 +7,7 @@ from finemed_ai.transform.medicine.medicine_transform import (
 
 def main() -> None:
 
-    transformer = MedicineTransformer(
-
-        medicine_dimension_path=Path(
-            "data/03_warehouse/dimensions/dim_product.parquet"
-        ),
-
-    )
+    transformer = MedicineTransformer()
 
     print("\nLoading Data...")
     transformer.load_data()
@@ -23,6 +17,15 @@ def main() -> None:
 
     print("\nBusiness Transformations...")
     transformer.business_transformations()
+
+    print("\nFirst 5 Rows")
+    print(transformer.medicine_df.head())
+
+    print("\nDataFrame Information")
+    transformer.medicine_df.info()
+
+    print("\nDescriptive Statistics")
+    print(transformer.medicine_df.describe(include="all"))
 
     print("\nSaving Silver Dataset...")
     transformer.save(

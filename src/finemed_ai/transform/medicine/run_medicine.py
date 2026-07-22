@@ -21,14 +21,6 @@ def main() -> None:
     log_step(logger, "=" * 70)
 
     # --------------------------------------------------
-    # Warehouse Input
-    # --------------------------------------------------
-
-    medicine_dimension_path = Path(
-        "data/03_warehouse/dimensions/dim_product.parquet"
-    )
-
-    # --------------------------------------------------
     # Silver Output
     # --------------------------------------------------
 
@@ -36,11 +28,14 @@ def main() -> None:
         "data/04_silver/medicine/medicine_silver.parquet"
     )
 
-    try:
+    logger.info(
+        "Silver Output : %s",
+        output_path,
+    )
 
-        transformer = MedicineTransformer(
-            medicine_dimension_path=medicine_dimension_path,
-        )
+    transformer = MedicineTransformer()
+
+    try:
 
         transformer.run(output_path)
 

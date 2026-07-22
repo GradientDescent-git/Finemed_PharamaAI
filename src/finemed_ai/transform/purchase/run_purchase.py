@@ -20,52 +20,33 @@ def main() -> None:
     log_step(logger, "Starting Purchase Silver Layer Pipeline")
     log_step(logger, "=" * 70)
 
-    
-    # Warehouse Inputs
    
-    fact_purchase_header_path = Path(
-        "data/03_warehouse/facts/fact_purchase_header.parquet"
-    )
-
-    fact_purchase_line_path = Path(
-        "data/03_warehouse/facts/fact_purchase_line.parquet"
-    )
-
-    dim_supplier_path = Path(
-        "data/03_warehouse/dimensions/dim_supplier.parquet"
-    )
-
-    dim_medicine_path = Path(
-        "data/03_warehouse/dimensions/dim_product.parquet"
-    )
-
-    dim_date_path = Path(
-        "data/03_warehouse/dimensions/dim_date.parquet"
-    )
-
-    
     # Silver Output
-    
+
     output_path = Path(
         "data/04_silver/purchase/purchase_silver.parquet"
     )
 
-    
-    # Execute Pipeline
-    
-    transformer = PurchaseTransformer(
-        fact_purchase_header_path=fact_purchase_header_path,
-        fact_purchase_line_path=fact_purchase_line_path,
-        dim_supplier_path=dim_supplier_path,
-        dim_medicine_path=dim_medicine_path,
-        dim_date_path=dim_date_path,
-    )
+    try:
 
-    transformer.run(output_path)
+        transformer = PurchaseTransformer()
 
-    log_step(logger, "=" * 70)
-    log_step(logger, "Purchase Silver Layer Completed Successfully")
-    log_step(logger, "=" * 70)
+        transformer.run(output_path)
+
+        log_step(logger, "=" * 70)
+        log_step(
+            logger,
+            "Purchase Silver Layer Completed Successfully",
+        )
+        log_step(logger, "=" * 70)
+
+    except Exception:
+
+        logger.exception(
+            "Purchase Silver Layer Pipeline Failed."
+        )
+
+        raise
 
 
 if __name__ == "__main__":

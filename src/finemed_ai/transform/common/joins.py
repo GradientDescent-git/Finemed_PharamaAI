@@ -10,141 +10,219 @@ from finemed_ai.transform.common.helper_functions import (
 logger = get_logger(__name__)
 
 
-def merge_dimension(
-    fact_df: pd.DataFrame,
-    dimension_df: pd.DataFrame,
-    fact_key: str,
-    dimension_key: str,
-    how: str = "left") -> pd.DataFrame:
-    
-    """ Merge a fact table with a dimension table. """
+# Generic Merge Function
 
+
+def merge_dimension(fact_df: pd.DataFrame,dimension_df: pd.DataFrame,fact_key: str,dimension_key: str,how: str = "left") -> pd.DataFrame:
     logger.info(
-        "Joining fact (%s rows) with dimension (%s rows) on %s -> %s",
+        "Joining fact (%d rows) with dimension (%d rows) on %s -> %s",
         len(fact_df),
         len(dimension_df),
         fact_key,
-        dimension_key,
-    )
-
+        dimension_key)
     try:
         validate_columns_exist(
             fact_df,
             [fact_key],
             logger=logger,
-            df_name="Fact Table",
-        )
-
+            df_name="Fact Table")
+        
         validate_columns_exist(
             dimension_df,
             [dimension_key],
             logger=logger,
-            df_name="Dimension Table",
-        )
-
-        merged = fact_df.merge(
+            df_name="Dimension Table")
+        
+        # Remove duplicate columns from dimension except join key
+        duplicate_columns = [
+            col
+            for col in dimension_df.columns
+            if col in fact_df.columns and col != dimension_key]
+        
+        dimension_df = dimension_df.drop(
+            columns=duplicate_columns,
+            errors="ignore")
+        
+        merged_df = fact_df.merge(
             dimension_df,
             left_on=fact_key,
             right_on=dimension_key,
-            how=how,
-        )
-
+            how=how)
+        
+        if fact_key != dimension_key:
+            merged_df = merged_df.drop(
+                columns=[dimension_key],
+                errors="ignore")
+            
         logger.info(
             "Join completed successfully | rows=%d | columns=%d",
-            len(merged),
-            len(merged.columns),
-        )
-
-        return merged
-
+            len(merged_df),
+            len(merged_df.columns))
+            
+        return merged_df
+        
     except Exception:
         logger.exception(
-            "Failed while joining %s with %s",
+            "Failed while joining %s -> %s",
             fact_key,
-            dimension_key,
-        )
+            dimension_key)
         raise
 
 
-def join_sales_with_customer(
-    sales_df: pd.DataFrame,
-    customer_df: pd.DataFrame) -> pd.DataFrame:
+# SALES WRAPPERS
 
+
+def join_sales_invoice_line(
+    sales_line_df: pd.DataFrame,
+    sales_invoice_df: pd.DataFrame,
+) -> pd.DataFrame:
+    return merge_dimension(
+        sales_line_df,
+        sales_invoice_df,
+        fact_key="INVNO",
+        dimension_key="INVNO",
+    )
+
+
+def join_sales_with_salesperson(
+    sales_df: pd.DataFrame,
+    salesperson_df: pd.DataFrame,
+) -> pd.DataFrame:
     return merge_dimension(
         sales_df,
-        customer_df,
-        fact_key="Customer_ID",
-        dimension_key="Customer_ID",
+        salesperson_df,
+        fact_key="SCODE",
+        dimension_key="SCODE",
     )
 
 
 def join_sales_with_date(
     sales_df: pd.DataFrame,
-    date_df: pd.DataFrame) -> pd.DataFrame:
-
+    date_df: pd.DataFrame,
+) -> pd.DataFrame:
     return merge_dimension(
         sales_df,
         date_df,
-        fact_key="Date_ID",
-        dimension_key="Date_ID",
+        fact_key="INVDT",
+        dimension_key="full_date",
+    )
+
+
+def join_sales_with_product(
+    sales_df: pd.DataFrame,
+    medicine_df: pd.DataFrame,
+) -> pd.DataFrame:
+    return merge_dimension(
+        sales_df,
+        medicine_df,
+        fact_key="MDCODE",
+        dimension_key="MDCODE",
+    )
+
+
+def join_sales_with_tax(
+    sales_df: pd.DataFrame,
+    tax_df: pd.DataFrame,
+) -> pd.DataFrame:
+    return merge_dimension(
+        sales_df,
+        tax_df,
+        fact_key="TCODE",
+        dimension_key="TCODE",
+    )
+
+
+# PURCHASE WRAPPERS
+
+
+def join_purchase_header_line(
+    purchase_line_df: pd.DataFrame,
+    purchase_header_df: pd.DataFrame,
+) -> pd.DataFrame:
+    return merge_dimension(
+        purchase_line_df,
+        purchase_header_df,
+        fact_key="PINVNO",
+        dimension_key="PINVNO",
     )
 
 
 def join_purchase_with_supplier(
     purchase_df: pd.DataFrame,
-    supplier_df: pd.DataFrame) -> pd.DataFrame:
-
+    supplier_df: pd.DataFrame,
+) -> pd.DataFrame:
     return merge_dimension(
         purchase_df,
         supplier_df,
-        fact_key="Supplier_ID",
-        dimension_key="Supplier_ID",
+        fact_key="SUPNO",
+        dimension_key="SUPNO",
     )
 
 
 def join_purchase_with_medicine(
     purchase_df: pd.DataFrame,
-    medicine_df: pd.DataFrame) -> pd.DataFrame:
-
+    medicine_df: pd.DataFrame,
+) -> pd.DataFrame:
     return merge_dimension(
         purchase_df,
         medicine_df,
-        fact_key="Medicine_ID",
-        dimension_key="Medicine_ID",
+        fact_key="MDCODE",
+        dimension_key="MDCODE",
     )
 
 
-def join_inventory_with_medicine(
-    inventory_df: pd.DataFrame,
-    medicine_df: pd.DataFrame) -> pd.DataFrame:
-
+def join_purchase_with_tax(
+    purchase_df: pd.DataFrame,
+    tax_df: pd.DataFrame,
+) -> pd.DataFrame:
     return merge_dimension(
-        inventory_df,
-        medicine_df,
-        fact_key="Medicine_ID",
-        dimension_key="Medicine_ID",
+        purchase_df,
+        tax_df,
+        fact_key="TCODE",
+        dimension_key="TCODE",
     )
+
+
+def join_purchase_with_date(
+    purchase_df: pd.DataFrame,
+    date_df: pd.DataFrame,
+) -> pd.DataFrame:
+    return merge_dimension(
+        purchase_df,
+        date_df,
+        fact_key="PINVDT",
+        dimension_key="full_date",
+    )
+
+
+# MULTIPLE JOINS
 
 
 def join_multiple_tables(
     base_df: pd.DataFrame,
-    joins: list[tuple[pd.DataFrame, str, str, str]]) -> pd.DataFrame:
+    joins: list[tuple[pd.DataFrame, str, str, str]],
+) -> pd.DataFrame:
     """
-    Sequentially join multiple dimension tables.
+    Sequentially performs multiple joins.
+
+    joins = [
+        (dimension_df, fact_key, dimension_key, how),
+        ...
+    ]
     """
 
     logger.info(
-        "Starting multiple table joins | total joins=%d",
+        "Starting multiple joins | total joins=%d",
         len(joins),
     )
 
-    result = base_df.copy()
+    result_df = base_df.copy()
 
     try:
         for dataframe, left_key, right_key, how in joins:
 
-            result = merge_dimension(
-                result,
+            result_df = merge_dimension(
+                result_df,
                 dataframe,
                 left_key,
                 right_key,
@@ -152,12 +230,12 @@ def join_multiple_tables(
             )
 
         logger.info(
-            "All joins completed successfully | final rows=%d | columns=%d",
-            len(result),
-            len(result.columns),
+            "All joins completed successfully | rows=%d | columns=%d",
+            len(result_df),
+            len(result_df.columns),
         )
 
-        return result
+        return result_df
 
     except Exception:
         logger.exception(
