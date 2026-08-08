@@ -8,4 +8,35 @@ pydantic>=2.9
 pandas>=2.2
 pyarrow>=17.0
 anthropic>=0.40
+
+
+
+# --- ETL / core ---
+pandas>=2.2
+pyarrow>=17.0
+python-dotenv>=1.0
+dbfread>=2.0
+
+# --- Database (warehouse layer) ---
+psycopg2-binary>=2.9
+sqlalchemy>=2.0
+
+# --- Forecasting (batch job — heavy, see Dockerfile.forecasting) ---
+torch>=2.2
+chronos-forecasting>=1.0
+pydantic>=2.9
+
+# --- LLM layer ---
+anthropic>=0.40
+
+# --- API (serving — lightweight, see Dockerfile) ---
+fastapi>=0.115
+uvicorn[standard]>=0.32
+
+# --- Automation ---
+schedule>=1.2
+
+# --- Testing ---
+pytest>=8.0
+httpx>=0.27
  
