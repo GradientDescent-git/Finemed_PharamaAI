@@ -5,7 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
  
 import finemed_ai.api.main as api_main
-from finemed_ai.forecasting.store import ForecastStore
+from finemed_ai.demand_forecasting.store import ForecastStore
  
  
 @pytest.fixture

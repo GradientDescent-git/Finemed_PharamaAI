@@ -3,7 +3,7 @@ from datetime import datetime
 import pandas as pd
 import pytest
  
-from finemed_ai.forecasting.store import ForecastStore
+from finemed_ai.demand_forecasting.store import ForecastStore
 from finemed_ai.llm.tools import ForecastTools
  
  

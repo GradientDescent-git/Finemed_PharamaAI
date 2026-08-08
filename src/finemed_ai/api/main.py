@@ -11,7 +11,7 @@ from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
  
-from finemed_ai.forecasting.store import ForecastNotFoundError, ForecastStore
+from finemed_ai.demand_forecasting.store import ForecastNotFoundError, ForecastStore
 from finemed_ai.llm.orchestrator import Orchestrator
 from finemed_ai.llm.tools import ForecastTools
  
@@ -153,7 +153,7 @@ def refresh(background_tasks: BackgroundTasks):
     the synchronous background-task version here is fine for a portfolio
     demo but will block your web dyno's other requests while it runs.
     """
-    from finemed_ai.forecasting.pipeline import run_monthly_forecast
+    from finemed_ai.demand_forecasting.pipeline import run_monthly_forecast
  
     silver_path = Path(os.environ.get("SILVER_DEMAND_PATH", "data/04_silver/demand_daily.parquet"))
     if not silver_path.exists():

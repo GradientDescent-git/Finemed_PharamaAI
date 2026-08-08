@@ -6,7 +6,7 @@ from typing import List, Optional
  
 import pandas as pd
  
-from finemed_ai.forecasting.schemas import (
+from finemed_ai.demand_forecasting.schemas import (
     ForecastDayResult,
     MedicineForecastResult,
     QuantileForecast,

@@ -2,7 +2,7 @@ from __future__ import annotations
  
 from typing import Any, Dict
  
-from finemed_ai.forecasting.store import ForecastNotFoundError, ForecastStore
+from finemed_ai.demand_forecasting.store import ForecastNotFoundError, ForecastStore
  
 # ---------------------------------------------------------------------------
 # Anthropic tool schemas (JSON schema, per Claude tool-use spec)

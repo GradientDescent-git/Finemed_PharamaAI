@@ -5,7 +5,7 @@ from pathlib import Path
  
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
  
-from finemed_ai.forecasting.pipeline import run_monthly_forecast  # noqa: E402
+from finemed_ai.demand_forecasting.pipeline import run_monthly_forecast  # noqa: E402
  
 logging.basicConfig(
     level=logging.INFO,

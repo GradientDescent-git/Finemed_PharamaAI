@@ -4,8 +4,8 @@ import numpy as np
 import pandas as pd
 import pytest
  
-from finemed_ai.forecasting.config import ForecastConfig
-from finemed_ai.forecasting.predictor_service import (
+from finemed_ai.demand_forecasting.config import ForecastConfig
+from finemed_ai.demand_forecasting.predictor_service import (
     InsufficientHistoryError,
     PredictorService,
 )
@@ -92,7 +92,7 @@ def test_forecast_batch_isolates_failures(fake_service, monkeypatch):
  
  
 def test_summary_detects_increasing_trend():
-    from finemed_ai.forecasting.schemas import (
+    from finemed_ai.demand_forecasting.schemas import (
         ForecastDayResult, MedicineForecastResult, QuantileForecast,
     )
  
