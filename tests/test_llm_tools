@@ -1,0 +1,72 @@
+from datetime import datetime
+ 
+import pandas as pd
+import pytest
+ 
+from finemed_ai.forecasting.store import ForecastStore
+from finemed_ai.llm.tools import ForecastTools
+ 
+ 
+@pytest.fixture
+def store(tmp_path):
+    rows = []
+    for i in range(30):
+        rows.append({
+            "Medicine_ID": "42",
+            "Forecast_Date": pd.Timestamp("2025-06-01") + pd.Timedelta(days=i),
+            "Predicted_Demand": 10.0 + i * 0.5,  # rising trend
+            "P10": 5.0, "P20": 6.0, "P30": 7.0, "P40": 8.0, "P50": 10.0 + i * 0.5,
+            "P60": 12.0, "P70": 14.0, "P80": 16.0, "P90": 18.0,
+            "Context_Length_Used": 730,
+            "Model_ID": "amazon/chronos-2",
+            "Generated_At": datetime.now(),
+        })
+    path = tmp_path / "latest.parquet"
+    pd.DataFrame(rows).to_parquet(path)
+    return ForecastStore(path)
+ 
+ 
+def test_get_forecast_tool(store):
+    tools = ForecastTools(store)
+    result = tools.execute("get_forecast", {"medicine_id": "42"})
+    assert result["medicine_id"] == "42"
+    assert len(result["days"]) == 30
+    assert "p10" in result["days"][0]
+ 
+ 
+def test_get_trend_tool_detects_increase(store):
+    tools = ForecastTools(store)
+    result = tools.execute("get_trend", {"medicine_id": "42"})
+    assert result["trend"] == "increasing"
+ 
+ 
+def test_get_summary_tool(store):
+    tools = ForecastTools(store)
+    result = tools.execute("get_summary", {"medicine_id": "42"})
+    assert result["medicine_id"] == "42"
+    assert result["avg_daily_demand"] > 0
+ 
+ 
+def test_unknown_medicine_returns_error_not_exception(store):
+    tools = ForecastTools(store)
+    result = tools.execute("get_forecast", {"medicine_id": "does-not-exist"})
+    assert "error" in result
+ 
+ 
+def test_unknown_tool_name_returns_error(store):
+    tools = ForecastTools(store)
+    result = tools.execute("not_a_real_tool", {"medicine_id": "42"})
+    assert "error" in result
+ 
+ 
+def test_store_reload_picks_up_new_data(store, tmp_path):
+    assert store.list_medicine_ids() == ["42"]
+    # simulate a new monthly run adding a medicine
+    new_rows = pd.read_parquet(store.latest_path)
+    extra = new_rows.iloc[[0]].copy()
+    extra["Medicine_ID"] = "99"
+    pd.concat([new_rows, extra]).to_parquet(store.latest_path)
+ 
+    assert store.is_stale()
+    store.reload()
+    assert "99" in store.list_medicine_ids()
