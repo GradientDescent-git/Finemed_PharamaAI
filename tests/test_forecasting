@@ -1,0 +1,117 @@
+from datetime import datetime, timedelta
+ 
+import numpy as np
+import pandas as pd
+import pytest
+ 
+from finemed_ai.forecasting.config import ForecastConfig
+from finemed_ai.forecasting.predictor_service import (
+    InsufficientHistoryError,
+    PredictorService,
+)
+ 
+ 
+class _FakeChronosPipeline:
+    """Stands in for Chronos2Pipeline.predict_df — returns a deterministic
+    forecast so assertions are exact, not just 'doesn't crash'."""
+ 
+    def predict_df(self, history, prediction_length, quantile_levels,
+                    id_column, timestamp_column, target):
+        last_date = history[timestamp_column].max()
+        dates = pd.date_range(last_date + timedelta(days=1), periods=prediction_length, freq="D")
+        base = history[target].tail(7).mean() if len(history) else 0.0
+ 
+        out = pd.DataFrame({timestamp_column: dates})
+        for q in quantile_levels:
+            out[str(q)] = base * q * 2  # arbitrary but deterministic spread
+        return out
+ 
+ 
+@pytest.fixture
+def fake_service():
+    service = PredictorService.__new__(PredictorService)  # bypass __init__ (no model load)
+    service.config = ForecastConfig()
+    service.pipeline = _FakeChronosPipeline()
+    service.device = "cpu"
+    return service
+ 
+ 
+def _make_history(item_id="1", days=800, daily_qty=10.0):
+    dates = pd.date_range("2023-01-01", periods=days, freq="D")
+    return pd.DataFrame({
+        "item_id": item_id,
+        "timestamp": dates,
+        "target": np.full(days, daily_qty),
+    })
+ 
+ 
+def test_forecast_medicine_returns_expected_horizon(fake_service):
+    history = _make_history()
+    result = fake_service.forecast_medicine("1", history)
+ 
+    assert result.medicine_id == "1"
+    assert result.prediction_length == 30
+    assert len(result.days) == 30
+    assert result.days[0].forecast_date == (history["timestamp"].max() + timedelta(days=1)).date()
+ 
+ 
+def test_forecast_medicine_uses_context_length_cap(fake_service):
+    # 800 days of history but context_length is capped at 730
+    history = _make_history(days=800)
+    result = fake_service.forecast_medicine("1", history)
+    assert result.context_length_used == 730
+ 
+ 
+def test_forecast_medicine_missing_item_raises(fake_service):
+    history = _make_history(item_id="1")
+    with pytest.raises(InsufficientHistoryError):
+        fake_service.forecast_medicine("999", history)
+ 
+ 
+def test_forecast_medicine_predicted_demand_never_negative(fake_service):
+    history = _make_history(daily_qty=0.0)  # zero-demand medicine (common in pharma tail)
+    result = fake_service.forecast_medicine("1", history)
+    assert all(d.predicted_demand >= 0 for d in result.days)
+ 
+ 
+def test_forecast_batch_isolates_failures(fake_service, monkeypatch):
+    history = _make_history(item_id="1")
+ 
+    def flaky_forecast(item_id, history_df):
+        if item_id == "2":
+            raise RuntimeError("simulated model failure")
+        return fake_service.__class__.forecast_medicine(fake_service, item_id, history_df)
+ 
+    monkeypatch.setattr(fake_service, "forecast_medicine", flaky_forecast)
+ 
+    two_medicines = pd.concat([history, _make_history(item_id="2")], ignore_index=True)
+    results, failed = fake_service.forecast_batch(two_medicines, item_ids=["1", "2"])
+ 
+    assert len(results) == 1
+    assert failed == ["2"]
+ 
+ 
+def test_summary_detects_increasing_trend():
+    from finemed_ai.forecasting.schemas import (
+        ForecastDayResult, MedicineForecastResult, QuantileForecast,
+    )
+ 
+    days = []
+    for i in range(30):
+        demand = 5.0 if i < 15 else 10.0  # clear step up in second half
+        q = QuantileForecast(p10=demand, p20=demand, p30=demand, p40=demand,
+                              p50=demand, p60=demand, p70=demand, p80=demand, p90=demand)
+        days.append(ForecastDayResult(
+            forecast_date=(datetime(2025, 1, 1) + timedelta(days=i)).date(),
+            predicted_demand=demand,
+            quantiles=q,
+        ))
+ 
+    result = MedicineForecastResult(
+        medicine_id="1", generated_at=datetime.now(), context_length_used=730,
+        prediction_length=30, model_id="amazon/chronos-2", days=days,
+    )
+    summary = result.to_summary()
+    assert summary.trend == "increasing"
+    assert summary.trend_pct_change > 50
+ 
