@@ -1,0 +1,51 @@
+name: Tests
+ 
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+ 
+jobs:
+  test:
+    runs-on: ubuntu-latest
+ 
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+ 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+ 
+      - name: Install lightweight dependencies
+        # Deliberately install only what tests/ actually needs to import:
+        # pandas/pyarrow/pydantic/fastapi/httpx for the demand_forecasting,
+        # llm, and api test suites. torch + chronos-forecasting are NOT
+        # installed here on purpose -- predictor_service.py defers those
+        # imports until PredictorService.__init__() actually runs (see its
+        # docstring), and none of our tests construct a real PredictorService
+        # (they use a fake pipeline / mocked Orchestrator instead). Installing
+        # torch in CI would cost minutes per run for zero test coverage gain.
+        run: |
+          python -m pip install --upgrade pip
+          pip install pandas pyarrow pydantic fastapi "uvicorn[standard]" httpx pytest anthropic
+ 
+      - name: Install finemed_ai package (editable)
+        # This is the step that was missing: pyproject.toml declares the
+        # finemed_ai package under src/, but nothing actually installs it
+        # into the CI runner's Python environment without this. Locally
+        # this worked because you ran `pip install -e .` once in your venv
+        # and it stayed installed — a fresh CI runner starts from nothing
+        # every time, so this has to run explicitly on every workflow run.
+        run: pip install -e . --no-deps
+ 
+      - name: Run test suite
+        run: pytest tests/ -v
+ 
+      - name: Summary
+        if: always()
+        run: echo "Tests completed — see logs above for pass/fail detail."
+ 

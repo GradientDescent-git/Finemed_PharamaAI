@@ -9,9 +9,9 @@ from typing import Optional
  
 import pandas as pd
  
-from finemed_ai.forecasting.config import DEFAULT_CONFIG, ForecastConfig
-from finemed_ai.forecasting.predictor_service import PredictorService
-from finemed_ai.forecasting.schemas import BatchForecastRunResult
+from finemed_ai.demand_forecasting.config import DEFAULT_CONFIG, ForecastConfig
+from finemed_ai.demand_forecasting.predictor_service import PredictorService
+from finemed_ai.demand_forecasting.schemas import BatchForecastRunResult
  
 logger = logging.getLogger(__name__)
  
