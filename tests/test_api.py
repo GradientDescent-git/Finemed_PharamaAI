@@ -26,8 +26,11 @@ def client(tmp_path, monkeypatch):
  
     monkeypatch.setenv("ADMIN_TOKEN", "test-secret")
     api_main.ADMIN_TOKEN = "test-secret"
+
+    monkeypatch.setenv("CLIENT_API_KEY", "test-client-key")
+    api_main.CLIENT_API_KEY = "test-client-key"
  
-    return TestClient(api_main.app)
+    return TestClient(api_main.app, headers={"x-api-key": "test-client-key"})
  
  
 def test_health(client):

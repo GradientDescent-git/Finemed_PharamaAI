@@ -20,6 +20,14 @@ logger = logging.getLogger("finemed_api")
  
 FORECAST_OUTPUT_DIR = Path(os.environ.get("FORECAST_OUTPUT_DIR", "data/05_forecasts"))
 ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN")
+
+# Shared API key for staff/founder access. Simple by design: this is a
+# small team, not an enterprise needing per-user login -- a single shared
+# key checked on every client-facing request is the right amount of
+# security for this scale, without building a full auth system nobody
+# asked for. Upgrade to per-user auth later if the team grows or the
+# client wants individual access logs.
+CLIENT_API_KEY = os.environ.get("CLIENT_API_KEY")
  
 _store: Optional[ForecastStore] = None
 _orchestrator: Optional[Orchestrator] = None
@@ -51,10 +59,20 @@ app = FastAPI(
     lifespan=lifespan,
 )
  
-# Tighten this to your actual frontend origin before going live.
+# CORS_ALLOWED_ORIGINS: comma-separated list, e.g.
+# "https://finemed-dashboard.yourdomain.com,http://localhost:3000"
+# No wildcard here -- this serves real client business data, not a public demo.
+_cors_origins = os.environ.get("CORS_ALLOWED_ORIGINS", "").split(",")
+_cors_origins = [o.strip() for o in _cors_origins if o.strip()]
+if not _cors_origins:
+    logger.warning(
+        "CORS_ALLOWED_ORIGINS not set -- no browser-based frontend origin is "
+        "allowed yet. Set this env var to your frontend's URL once it exists."
+    )
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -82,6 +100,19 @@ def require_admin(x_admin_token: Optional[str] = Header(default=None)) -> None:
         raise HTTPException(status_code=503, detail="ADMIN_TOKEN not configured on server")
     if x_admin_token != ADMIN_TOKEN:
         raise HTTPException(status_code=401, detail="Invalid admin token")
+
+
+def require_client_auth(x_api_key: Optional[str] = Header(default=None)) -> None:
+    """
+    Guards every staff/founder-facing endpoint (/chat, /forecast/*).
+    This is real client business data over the open internet now -- not a
+    public portfolio demo -- so every data-returning endpoint needs this,
+    not just /refresh.
+    """
+    if not CLIENT_API_KEY:
+        raise HTTPException(status_code=503, detail="CLIENT_API_KEY not configured on server")
+    if x_api_key != CLIENT_API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
  
  
 # ---------------------------------------------------------------------------
@@ -117,7 +148,7 @@ def health():
     }
  
  
-@app.get("/forecast/{medicine_id}")
+@app.get("/forecast/{medicine_id}", dependencies=[Depends(require_client_auth)])
 def get_forecast(medicine_id: str, store: ForecastStore = Depends(get_store)):
     try:
         result = store.get(medicine_id)
@@ -126,7 +157,7 @@ def get_forecast(medicine_id: str, store: ForecastStore = Depends(get_store)):
     return result.model_dump(mode="json")
  
  
-@app.get("/forecast/{medicine_id}/summary")
+@app.get("/forecast/{medicine_id}/summary", dependencies=[Depends(require_client_auth)])
 def get_forecast_summary(medicine_id: str, store: ForecastStore = Depends(get_store)):
     try:
         result = store.get(medicine_id)
@@ -135,7 +166,7 @@ def get_forecast_summary(medicine_id: str, store: ForecastStore = Depends(get_st
     return result.to_summary().model_dump(mode="json")
  
  
-@app.post("/chat", response_model=ChatResponse)
+@app.post("/chat", response_model=ChatResponse, dependencies=[Depends(require_client_auth)])
 def chat(req: ChatRequest, orchestrator: Orchestrator = Depends(get_orchestrator)):
     answer = orchestrator.ask(req.question, req.conversation_history)
     return ChatResponse(answer=answer)

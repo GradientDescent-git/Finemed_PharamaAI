@@ -104,7 +104,23 @@ class PredictorService:
  
         history = history.tail(cfg.context_length)
         actual_context = len(history)
- 
+
+        # Chronos-2 needs at least 3 regularly-spaced observations to infer
+        # a daily frequency at all -- below that it's not "lower quality,"
+        # it's mathematically unable to run (raises a cryptic internal
+        # "Could not infer frequency" ValueError). Fail cleanly and
+        # predictably here instead. In practice this means a brand-new or
+        # essentially-never-sold medicine -- forecast_batch correctly
+        # isolates this as one failed item, not a crashed run.
+        MIN_OBSERVATIONS_FOR_FREQUENCY_INFERENCE = 3
+        if actual_context < MIN_OBSERVATIONS_FOR_FREQUENCY_INFERENCE:
+            raise InsufficientHistoryError(
+                f"item_id={item_id} has only {actual_context} day(s) of history "
+                f"(minimum {MIN_OBSERVATIONS_FOR_FREQUENCY_INFERENCE} needed for "
+                f"Chronos-2 to infer a daily frequency). Likely a brand-new or "
+                f"near-zero-sales medicine -- skipping rather than forecasting."
+            )
+
         if actual_context < cfg.prediction_length:
             # Chronos-2 can still run on short series, but a forecast built
             # from less history than the forecast horizon itself is not
@@ -148,7 +164,16 @@ class PredictorService:
         for item_id in ids:
             try:
                 results.append(self.forecast_medicine(item_id, history_df))
+            except InsufficientHistoryError as e:
+                # Expected, handled data-quality case (brand-new / near-zero
+                # -sales medicine) -- log plainly, no traceback. A traceback
+                # here would make a routine skip look like a real bug every
+                # single monthly run.
+                logger.warning("Skipping item_id=%s: %s", item_id, e)
+                failed.append(str(item_id))
             except Exception:
+                # Anything else IS unexpected -- keep the full traceback,
+                # this is the case that should actually alarm you.
                 logger.exception("Forecast failed for item_id=%s", item_id)
                 failed.append(str(item_id))
  
