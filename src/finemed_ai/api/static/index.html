@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FineMed Pharma AI</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #171a21;
+    --border: #262b36;
+    --text: #e8eaed;
+    --muted: #9aa3b2;
+    --accent: #4f8cff;
+    --accent-dim: #2a3f66;
+    --error: #ef5350;
+    --radius: 10px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+  }
+  header {
+    padding: 20px 24px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  header h1 { font-size: 18px; margin: 0; font-weight: 600; }
+  header .status { font-size: 12px; color: var(--muted); }
+  header .status.ok { color: #66bb6a; }
+  header .status.bad { color: var(--error); }
+
+  main {
+    max-width: 780px;
+    margin: 0 auto;
+    padding: 24px;
+  }
+
+  .keybar {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 20px;
+  }
+  .keybar input {
+    flex: 1;
+    padding: 10px 12px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text);
+    font-size: 13px;
+  }
+  .keybar button {
+    padding: 10px 16px;
+    background: var(--accent);
+    border: none;
+    border-radius: var(--radius);
+    color: white;
+    font-size: 13px;
+    cursor: pointer;
+  }
+
+  .tabs { display: flex; gap: 4px; margin-bottom: 16px; }
+  .tabs button {
+    flex: 1;
+    padding: 10px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    color: var(--muted);
+    border-radius: var(--radius);
+    cursor: pointer;
+    font-size: 13px;
+  }
+  .tabs button.active { color: var(--text); border-color: var(--accent); background: var(--accent-dim); }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px;
+  }
+  .hidden { display: none; }
+
+  #chat-log {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin-bottom: 16px;
+    max-height: 420px;
+    overflow-y: auto;
+  }
+  .msg { padding: 10px 14px; border-radius: var(--radius); font-size: 14px; line-height: 1.5; max-width: 85%; }
+  .msg.user { align-self: flex-end; background: var(--accent-dim); }
+  .msg.assistant { align-self: flex-start; background: #1f232d; }
+  .msg.error { align-self: flex-start; background: #3a1f1f; color: #ffb4b0; }
+
+  .inputrow { display: flex; gap: 8px; }
+  .inputrow input {
+    flex: 1;
+    padding: 12px 14px;
+    background: #10131a;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text);
+    font-size: 14px;
+  }
+  .inputrow button {
+    padding: 12px 18px;
+    background: var(--accent);
+    border: none;
+    border-radius: var(--radius);
+    color: white;
+    cursor: pointer;
+    font-size: 14px;
+  }
+  .inputrow button:disabled { opacity: 0.5; cursor: default; }
+
+  .hint { font-size: 12px; color: var(--muted); margin-top: 8px; }
+
+  table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 500; }
+
+  .summary-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 16px; }
+  .stat { background: #10131a; border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; }
+  .stat .label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+  .stat .value { font-size: 20px; font-weight: 600; margin-top: 4px; }
+  .trend-increasing { color: #66bb6a; }
+  .trend-decreasing { color: var(--error); }
+  .trend-stable, .trend-flat { color: var(--muted); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>FineMed Pharma AI</h1>
+  <span id="status" class="status">checking...</span>
+</header>
+
+<main>
+  <div class="keybar">
+    <input id="api-key" type="password" placeholder="API key">
+    <button onclick="saveKey()">Save</button>
+  </div>
+
+  <div class="tabs">
+    <button class="active" onclick="showTab('chat')">Ask a question</button>
+    <button onclick="showTab('lookup')">Look up a medicine</button>
+  </div>
+
+  <div id="tab-chat" class="panel">
+    <div id="chat-log"></div>
+    <div class="inputrow">
+      <input id="chat-input" type="text" placeholder="e.g. how is medicine 42 trending?" onkeydown="if(event.key==='Enter') sendChat()">
+      <button id="chat-send" onclick="sendChat()">Ask</button>
+    </div>
+    <div class="hint">Ask about any medicine by its code, e.g. "what's the forecast for 0042?" or "is demand for 0110 going up or down?"</div>
+  </div>
+
+  <div id="tab-lookup" class="panel hidden">
+    <div class="inputrow">
+      <input id="lookup-input" type="text" placeholder="Medicine code, e.g. 0042" onkeydown="if(event.key==='Enter') lookupForecast()">
+      <button onclick="lookupForecast()">Look up</button>
+    </div>
+    <div id="lookup-result"></div>
+  </div>
+</main>
+
+<script>
+const API_BASE = ""; // same-origin, served by the same FastAPI app
+
+function getKey() { return localStorage.getItem("finemed_api_key") || ""; }
+function saveKey() {
+  const key = document.getElementById("api-key").value.trim();
+  if (key) { localStorage.setItem("finemed_api_key", key); checkHealth(); }
+}
+
+function showTab(name) {
+  document.getElementById("tab-chat").classList.toggle("hidden", name !== "chat");
+  document.getElementById("tab-lookup").classList.toggle("hidden", name !== "lookup");
+  document.querySelectorAll(".tabs button").forEach(b => b.classList.remove("active"));
+  event.target.classList.add("active");
+}
+
+async function checkHealth() {
+  const el = document.getElementById("status");
+  try {
+    const res = await fetch(`${API_BASE}/health`);
+    const data = await res.json();
+    el.textContent = `${data.medicines_available} medicines loaded · chat ${data.chat_available ? "available" : "unavailable"}`;
+    el.className = "status " + (data.status === "ok" ? "ok" : "bad");
+  } catch (e) {
+    el.textContent = "cannot reach server";
+    el.className = "status bad";
+  }
+}
+
+function addMsg(role, text) {
+  const log = document.getElementById("chat-log");
+  const div = document.createElement("div");
+  div.className = `msg ${role}`;
+  div.textContent = text;
+  log.appendChild(div);
+  log.scrollTop = log.scrollHeight;
+  return div;
+}
+
+let chatHistory = [];
+
+async function sendChat() {
+  const input = document.getElementById("chat-input");
+  const btn = document.getElementById("chat-send");
+  const question = input.value.trim();
+  if (!question) return;
+
+  addMsg("user", question);
+  input.value = "";
+  btn.disabled = true;
+  const thinking = addMsg("assistant", "...");
+
+  try {
+    const res = await fetch(`${API_BASE}/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-api-key": getKey() },
+      body: JSON.stringify({ question, conversation_history: chatHistory }),
+    });
+    if (res.status === 401) { thinking.textContent = "Invalid API key — check the key above."; thinking.className = "msg error"; return; }
+    if (res.status === 503) { thinking.textContent = "Chat is temporarily unavailable on the server."; thinking.className = "msg error"; return; }
+    if (!res.ok) { thinking.textContent = `Error (${res.status})`; thinking.className = "msg error"; return; }
+
+    const data = await res.json();
+    thinking.textContent = data.answer;
+    chatHistory.push({ role: "user", content: question });
+    chatHistory.push({ role: "assistant", content: data.answer });
+  } catch (e) {
+    thinking.textContent = "Could not reach the server.";
+    thinking.className = "msg error";
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function lookupForecast() {
+  const medicineId = document.getElementById("lookup-input").value.trim();
+  const result = document.getElementById("lookup-result");
+  if (!medicineId) return;
+  result.innerHTML = "<p class='hint'>Loading...</p>";
+
+  try {
+    const [summaryRes, forecastRes] = await Promise.all([
+      fetch(`${API_BASE}/forecast/${medicineId}/summary`, { headers: { "x-api-key": getKey() } }),
+      fetch(`${API_BASE}/forecast/${medicineId}`, { headers: { "x-api-key": getKey() } }),
+    ]);
+
+    if (summaryRes.status === 401) { result.innerHTML = "<p class='hint'>Invalid API key.</p>"; return; }
+    if (summaryRes.status === 404) { result.innerHTML = "<p class='hint'>No forecast found for that medicine code.</p>"; return; }
+    if (!summaryRes.ok || !forecastRes.ok) { result.innerHTML = "<p class='hint'>Error loading forecast.</p>"; return; }
+
+    const summary = await summaryRes.json();
+    const forecast = await forecastRes.json();
+
+    const trendClass = `trend-${summary.trend}`;
+    let html = `
+      <div class="summary-grid">
+        <div class="stat"><div class="label">Trend</div><div class="value ${trendClass}">${summary.trend}</div></div>
+        <div class="stat"><div class="label">Change</div><div class="value ${trendClass}">${summary.trend_pct_change > 0 ? "+" : ""}${summary.trend_pct_change}%</div></div>
+        <div class="stat"><div class="label">Avg daily demand</div><div class="value">${summary.avg_daily_demand}</div></div>
+        <div class="stat"><div class="label">Total (30 days)</div><div class="value">${summary.total_predicted_demand}</div></div>
+      </div>
+      <table>
+        <thead><tr><th>Date</th><th>Predicted</th><th>P10</th><th>P90</th></tr></thead>
+        <tbody>`;
+    forecast.days.slice(0, 10).forEach(d => {
+      html += `<tr><td>${d.forecast_date}</td><td>${d.predicted_demand}</td><td>${d.quantiles.p10}</td><td>${d.quantiles.p90}</td></tr>`;
+    });
+    html += `</tbody></table><div class="hint">Showing first 10 of ${forecast.days.length} forecasted days.</div>`;
+    result.innerHTML = html;
+  } catch (e) {
+    result.innerHTML = "<p class='hint'>Could not reach the server.</p>";
+  }
+}
+
+document.getElementById("api-key").value = getKey();
+checkHealth();
+</script>
+</body>
+</html>

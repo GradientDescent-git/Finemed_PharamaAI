@@ -9,6 +9,7 @@ from finemed_ai.pipeline.run_pipeline import run_pipeline
  
 from finemed_ai.demand_forecasting.config import ForecastConfig
 from finemed_ai.demand_forecasting.pipeline import run_monthly_forecast
+from finemed_ai.demand_forecasting.data_preparation import prepare_demand_data as _prepare_demand_data
  
 logger = get_logger(__name__)
  
@@ -37,16 +38,14 @@ class MonthlyPipeline:
  
     def prepare_demand_data(self) -> None:
         """
-        Silver-layer demand prep (daily calendar fill, etc.) currently
-        happens inside demand_forecasting.pipeline.run_monthly_forecast()
-        itself (_load_and_prepare_daily_demand). This method is a hook for
-        splitting that out into its own step later -- it is a no-op today,
-        logged explicitly so it's never mistaken for having done work.
+        Bridges the warehouse (Postgres fact_sales_line/fact_sales_invoice)
+        into the flat daily_demand.parquet the forecasting module reads.
+        Real logic lives in demand_forecasting.data_preparation -- this is
+        no longer a no-op.
         """
-        logger.info(
-            "prepare_demand_data: no separate step yet -- daily-calendar "
-            "prep runs inside run_monthly_forecast(). Nothing to do here."
-        )
+        logger.info("Preparing demand data from warehouse...")
+        output_path = _prepare_demand_data()
+        logger.info("Demand data written to %s", output_path)
  
     def generate_forecast(self):
         logger.info("Generating Forecast...")
