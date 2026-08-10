@@ -12,6 +12,7 @@ ENV/
 # Environment Variables
 .env
 .env.*
+!.env.example
 
 # IDE
 .vscode/
@@ -50,6 +51,9 @@ data/03_warehouse/*
 data/04_silver/*
 !data/04_silver/.gitkeep
 
+data/05_forecasts/*
+!data/05_forecasts/.gitkeep
+
 # OS Files
 .DS_Store
 Thumbs.db
@@ -59,3 +63,7 @@ desktop.ini
 *.tmp
 *.bak
 *.swp
+
+# Frontend (forward-looking, in case the frontend lands in this repo later)
+node_modules/
+.next/
