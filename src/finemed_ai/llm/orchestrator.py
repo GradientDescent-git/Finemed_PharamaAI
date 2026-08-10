@@ -53,13 +53,25 @@ class Orchestrator:
         messages.append({"role": "user", "content": question})
  
         for _ in range(self.max_tool_iterations):
-            response = self.client.messages.create(
-                model=self.model,
-                max_tokens=1024,
-                system=SYSTEM_PROMPT,
-                tools=TOOL_SCHEMAS,
-                messages=messages,
-            )
+            try:
+                response = self.client.messages.create(
+                    model=self.model,
+                    max_tokens=1024,
+                    system=SYSTEM_PROMPT,
+                    tools=TOOL_SCHEMAS,
+                    messages=messages,
+                )
+            except Exception as e:
+                # Covers missing/invalid ANTHROPIC_API_KEY, rate limits, and
+                # transient network errors -- all of these should surface as
+                # a plain, readable message in the chat UI, not a raw 500
+                # that the browser shows as "Error (500)" with no context.
+                logger.error("Claude API call failed: %s", e)
+                return (
+                    "Sorry, I could not reach the AI service just now. "
+                    "This is usually a configuration issue on the server "
+                    "(e.g. the API key) -- please contact support if this persists."
+                )
  
             if response.stop_reason != "tool_use":
                 return self._extract_text(response)
