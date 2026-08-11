@@ -60,6 +60,76 @@ TOOL_SCHEMAS = [
             "required": ["medicine_id"],
         },
     },
+    {
+        "name": "get_top_demand_medicines",
+        "description": (
+            "Get the medicines with the HIGHEST total predicted demand over "
+            "the forecast horizon, ranked highest first. Use this for "
+            "'which medicines will have the highest demand', 'top selling "
+            "medicines next month', or similar ranking questions."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "n": {"type": "integer", "description": "How many top medicines to return. Default 10."}
+            },
+        },
+    },
+    {
+        "name": "get_demand_trend_medicines",
+        "description": (
+            "Get medicines matching a specific trend direction (increasing, "
+            "decreasing, or stable demand), ranked by size of change. Use "
+            "this for 'which medicines are trending up/down' questions."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "trend": {
+                    "type": "string",
+                    "enum": ["increasing", "decreasing", "stable", "flat"],
+                    "description": "Which trend direction to filter for.",
+                },
+                "n": {"type": "integer", "description": "How many medicines to return. Default 10."},
+            },
+            "required": ["trend"],
+        },
+    },
+    {
+        "name": "get_most_uncertain_medicines",
+        "description": (
+            "Get the medicines whose forecasts have the WIDEST uncertainty "
+            "range (P10-P90 spread relative to the central forecast) -- "
+            "these are the forecasts to trust least and may need manual "
+            "review. Use this for 'which forecasts are least reliable' or "
+            "'which medicines have uncertain demand' questions."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "n": {"type": "integer", "description": "How many medicines to return. Default 10."}
+            },
+        },
+    },
+    {
+        "name": "compare_medicines",
+        "description": (
+            "Compare the forecasts of two or more specific medicines "
+            "side by side. Use this when the employee names multiple "
+            "medicine codes and asks to compare them."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "medicine_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "The medicine codes to compare, e.g. ['0001', '0042'].",
+                }
+            },
+            "required": ["medicine_ids"],
+        },
+    },
 ]
  
  
@@ -104,7 +174,27 @@ class ForecastTools:
                 result = self.store.get(medicine_id)
                 summary = result.to_summary()
                 return summary.model_dump(mode="json")
- 
+
+            elif tool_name == "get_top_demand_medicines":
+                n = tool_input.get("n", 10)
+                summaries = self.store.get_top_demand(n=n)
+                return {"medicines": [s.model_dump(mode="json") for s in summaries]}
+
+            elif tool_name == "get_demand_trend_medicines":
+                trend = tool_input.get("trend", "increasing")
+                n = tool_input.get("n", 10)
+                summaries = self.store.get_by_trend(trend, n=n)
+                return {"medicines": [s.model_dump(mode="json") for s in summaries]}
+
+            elif tool_name == "get_most_uncertain_medicines":
+                n = tool_input.get("n", 10)
+                return {"medicines": self.store.get_most_uncertain(n=n)}
+
+            elif tool_name == "compare_medicines":
+                ids = tool_input.get("medicine_ids", [])
+                summaries = self.store.compare(ids)
+                return {"medicines": [s.model_dump(mode="json") for s in summaries]}
+
             else:
                 return {"error": f"Unknown tool: {tool_name}"}
  

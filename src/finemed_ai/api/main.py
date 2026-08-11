@@ -190,6 +190,37 @@ def health():
     }
  
  
+@app.get("/forecast/top", dependencies=[Depends(require_client_auth)])
+def get_top_demand(n: int = 10, store: ForecastStore = Depends(get_store)):
+    """Medicines with the highest total predicted demand, ranked."""
+    summaries = store.get_top_demand(n=n)
+    return {"medicines": [s.model_dump(mode="json") for s in summaries]}
+
+
+@app.get("/forecast/trend", dependencies=[Depends(require_client_auth)])
+def get_by_trend(direction: str, n: int = 10, store: ForecastStore = Depends(get_store)):
+    """Medicines matching a trend direction (increasing/decreasing/stable/flat)."""
+    valid = {"increasing", "decreasing", "stable", "flat"}
+    if direction not in valid:
+        raise HTTPException(status_code=400, detail=f"direction must be one of {sorted(valid)}")
+    summaries = store.get_by_trend(direction, n=n)
+    return {"medicines": [s.model_dump(mode="json") for s in summaries]}
+
+
+@app.get("/forecast/uncertain", dependencies=[Depends(require_client_auth)])
+def get_most_uncertain(n: int = 10, store: ForecastStore = Depends(get_store)):
+    """Medicines with the widest relative forecast uncertainty (P10-P90 spread)."""
+    return {"medicines": store.get_most_uncertain(n=n)}
+
+
+@app.get("/forecast/compare", dependencies=[Depends(require_client_auth)])
+def compare_medicines(ids: str, store: ForecastStore = Depends(get_store)):
+    """Compare specific medicines side by side. ids = comma-separated medicine codes, e.g. ?ids=0001,0042"""
+    medicine_ids = [i.strip() for i in ids.split(",") if i.strip()]
+    summaries = store.compare(medicine_ids)
+    return {"medicines": [s.model_dump(mode="json") for s in summaries]}
+
+
 @app.get("/forecast/{medicine_id}", dependencies=[Depends(require_client_auth)])
 def get_forecast(medicine_id: str, store: ForecastStore = Depends(get_store)):
     try:

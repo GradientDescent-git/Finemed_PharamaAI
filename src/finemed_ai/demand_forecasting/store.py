@@ -8,6 +8,7 @@ import pandas as pd
  
 from finemed_ai.demand_forecasting.schemas import (
     ForecastDayResult,
+    ForecastSummary,
     MedicineForecastResult,
     QuantileForecast,
 )
@@ -95,4 +96,62 @@ class ForecastStore:
             model_id=first["Model_ID"],
             days=days,
         )
- 
+
+    def get_all_summaries(self) -> List[ForecastSummary]:
+        """
+        One ForecastSummary per medicine currently forecasted. This is the
+        backbone for ranking/comparison tools (top-demand, trend-based
+        filtering, uncertainty ranking) -- computing all of them once here
+        is much cheaper than each tool re-deriving summaries independently.
+        """
+        summaries = []
+        for medicine_id in self.list_medicine_ids():
+            try:
+                summaries.append(self.get(medicine_id).to_summary())
+            except ForecastNotFoundError:
+                continue
+        return summaries
+
+    def get_top_demand(self, n: int = 10) -> List[ForecastSummary]:
+        """Top N medicines by total predicted demand over the forecast horizon."""
+        summaries = self.get_all_summaries()
+        return sorted(summaries, key=lambda s: s.total_predicted_demand, reverse=True)[:n]
+
+    def get_by_trend(self, trend: str, n: int = 10) -> List[ForecastSummary]:
+        """Medicines matching a trend direction ('increasing', 'decreasing',
+        'stable', 'flat'), sorted by magnitude of change."""
+        summaries = [s for s in self.get_all_summaries() if s.trend == trend]
+        return sorted(summaries, key=lambda s: abs(s.trend_pct_change), reverse=True)[:n]
+
+    def get_most_uncertain(self, n: int = 10) -> List[dict]:
+        """
+        Medicines with the widest P10-P90 spread relative to their P50 --
+        i.e. where the forecast itself is least confident. Useful for
+        flagging medicines that need closer manual attention rather than
+        blind trust in the point forecast.
+        """
+        if self._df is None or self._df.empty:
+            return []
+
+        results = []
+        for medicine_id, group in self._df.groupby("Medicine_ID"):
+            avg_p50 = group["P50"].mean()
+            avg_spread = (group["P90"] - group["P10"]).mean()
+            relative_uncertainty = (avg_spread / avg_p50 * 100) if avg_p50 > 0 else 0.0
+            results.append({
+                "medicine_id": medicine_id,
+                "avg_p50": round(float(avg_p50), 2),
+                "avg_p10_p90_spread": round(float(avg_spread), 2),
+                "relative_uncertainty_pct": round(float(relative_uncertainty), 1),
+            })
+        return sorted(results, key=lambda r: r["relative_uncertainty_pct"], reverse=True)[:n]
+
+    def compare(self, medicine_ids: List[str]) -> List[ForecastSummary]:
+        """Summaries for a specific set of medicines, for direct comparison."""
+        results = []
+        for mid in medicine_ids:
+            try:
+                results.append(self.get(str(mid)).to_summary())
+            except ForecastNotFoundError:
+                continue
+        return results

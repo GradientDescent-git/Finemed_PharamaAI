@@ -1,0 +1,8 @@
+{
+  "run_id": "e7b3f968efbf",
+  "month": "2026-08",
+  "stage": "failed",
+  "started_at": "2026-08-10T16:23:11.470864+00:00",
+  "updated_at": "2026-08-10T16:23:44.151777+00:00",
+  "error": "(psycopg2.OperationalError) connection to server at \"localhost\" (::1), port 5432 failed: FATAL:  password authentication failed for user \"postgres\"\n\n(Background on this error at: https://sqlalche.me/e/20/e3q8)"
+}
