@@ -120,8 +120,31 @@ def run_monthly_forecast(
     forecast_df.to_parquet(forecast_path, index=False)
  
     latest_path = output_dir / "latest.parquet"
-    forecast_df.to_parquet(latest_path, index=False)
- 
+
+    # Quality gate (spec section 26 -- "forecast version promotion"): don't
+    # blindly replace the production forecast. If too few medicines
+    # succeeded, this run is degraded -- it's still published to the
+    # versioned run history above for audit purposes, but latest.parquet
+    # (what the API/LLM actually serve) keeps the LAST GOOD forecast rather
+    # than being replaced with something worse. Threshold is deliberately
+    # generous (50%) -- this is a coarse safety net against catastrophic
+    # failures (e.g. a broken data feed), not a tight SLA.
+    MIN_SUCCESS_RATE = 0.5
+    success_rate = len(results) / len(medicine_ids) if medicine_ids else 0.0
+    published = success_rate >= MIN_SUCCESS_RATE
+
+    if published:
+        forecast_df.to_parquet(latest_path, index=False)
+        publish_note = ""
+    else:
+        publish_note = (
+            f"NOT published: only {len(results)}/{len(medicine_ids)} medicines "
+            f"succeeded ({success_rate:.0%}, below the {MIN_SUCCESS_RATE:.0%} "
+            f"threshold). The previous latest.parquet was retained -- check "
+            f"failed_medicine_ids and logs before investigating further."
+        )
+        logger.error(publish_note)
+
     completed_at = datetime.now(timezone.utc)
     manifest = BatchForecastRunResult(
         run_id=run_id,
@@ -132,6 +155,8 @@ def run_monthly_forecast(
         medicines_failed=len(failed),
         failed_medicine_ids=failed,
         output_path=str(forecast_path),
+        published=published,
+        publish_note=publish_note,
     )
     (run_dir / "manifest.json").write_text(manifest.model_dump_json(indent=2))
  

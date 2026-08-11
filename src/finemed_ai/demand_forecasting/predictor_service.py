@@ -196,17 +196,45 @@ class PredictorService:
         days: List[ForecastDayResult] = []
  
         for _, row in raw_forecast.iterrows():
+            raw_values = [
+                max(float(row["0.1"]), 0.0), max(float(row["0.2"]), 0.0),
+                max(float(row["0.3"]), 0.0), max(float(row["0.4"]), 0.0),
+                max(float(row["0.5"]), 0.0), max(float(row["0.6"]), 0.0),
+                max(float(row["0.7"]), 0.0), max(float(row["0.8"]), 0.0),
+                max(float(row["0.9"]), 0.0),
+            ]
+
+            # Quantiles should be non-decreasing by construction (P10 <=
+            # P50 <= P90 etc.), but enforce it defensively rather than
+            # trusting it blindly -- sparse/degenerate series can produce
+            # numerical artifacts that violate this. Cumulative max forces
+            # monotonicity; log loudly if a correction was actually needed,
+            # since that indicates the underlying series is unusual and
+            # worth a human look.
+            monotonic_values = []
+            running_max = 0.0
+            corrected = False
+            for v in raw_values:
+                if v < running_max:
+                    corrected = True
+                    v = running_max
+                running_max = v
+                monotonic_values.append(v)
+
+            if corrected:
+                logger.warning(
+                    "Non-monotonic quantiles detected for item_id=%s on %s -- "
+                    "corrected via cumulative max. Raw: %s",
+                    item_id, row[cfg.timestamp_column], raw_values,
+                )
+
             quantiles = QuantileForecast(
-                p10=max(float(row["0.1"]), 0.0),
-                p20=max(float(row["0.2"]), 0.0),
-                p30=max(float(row["0.3"]), 0.0),
-                p40=max(float(row["0.4"]), 0.0),
-                p50=max(float(row["0.5"]), 0.0),
-                p60=max(float(row["0.6"]), 0.0),
-                p70=max(float(row["0.7"]), 0.0),
-                p80=max(float(row["0.8"]), 0.0),
-                p90=max(float(row["0.9"]), 0.0),
+                p10=monotonic_values[0], p20=monotonic_values[1], p30=monotonic_values[2],
+                p40=monotonic_values[3], p50=monotonic_values[4], p60=monotonic_values[5],
+                p70=monotonic_values[6], p80=monotonic_values[7], p90=monotonic_values[8],
             )
+
+            point = getattr(quantiles, f"p{int(cfg.point_quantile * 100)}")
             point = getattr(quantiles, f"p{int(cfg.point_quantile * 100)}")
  
             days.append(

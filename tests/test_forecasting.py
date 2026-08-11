@@ -115,3 +115,29 @@ def test_summary_detects_increasing_trend():
     assert summary.trend == "increasing"
     assert summary.trend_pct_change > 50
  
+
+def test_quantiles_are_monotonic_even_with_degenerate_model_output(fake_service):
+    """Spec requirement: P10 <= P20 <= ... <= P90 must always hold, even if
+    the underlying model produces non-monotonic values for some reason."""
+
+    class _NonMonotonicPipeline:
+        def predict_df(self, history, prediction_length, quantile_levels,
+                        id_column, timestamp_column, target):
+            last_date = history[timestamp_column].max()
+            dates = pd.date_range(last_date + timedelta(days=1), periods=prediction_length, freq="D")
+            out = pd.DataFrame({timestamp_column: dates})
+            # Deliberately non-monotonic: p50 < p10 on purpose
+            values = {"0.1": 50, "0.2": 10, "0.3": 15, "0.4": 20, "0.5": 5,
+                      "0.6": 60, "0.7": 65, "0.8": 40, "0.9": 90}
+            for q, v in values.items():
+                out[q] = v
+            return out
+
+    fake_service.pipeline = _NonMonotonicPipeline()
+    history = _make_history()
+    result = fake_service.forecast_medicine("1", history)
+
+    for day in result.days:
+        q = day.quantiles
+        values = [q.p10, q.p20, q.p30, q.p40, q.p50, q.p60, q.p70, q.p80, q.p90]
+        assert values == sorted(values), f"Quantiles not monotonic: {values}"

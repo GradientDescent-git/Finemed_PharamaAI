@@ -91,4 +91,6 @@ class BatchForecastRunResult(BaseModel):
     medicines_failed: int
     failed_medicine_ids: List[str]
     output_path: str
+    published: bool  # False if held back due to failing the quality gate
+    publish_note: str = ""  # explains why, if published=False
  
