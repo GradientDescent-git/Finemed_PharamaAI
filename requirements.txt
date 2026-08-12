@@ -1,29 +1,27 @@
-pandas 
-pyarrow
-python-dotenv
-
 # --- ETL / core ---
 pandas>=2.2
 pyarrow>=17.0
 python-dotenv>=1.0
 dbfread>=2.0
 
-# --- Database (warehouse layer) ---
+# --- Database ---
 psycopg2-binary>=2.9
 sqlalchemy>=2.0
 
-# --- Forecasting (batch job — heavy, see Dockerfile.forecasting) ---
+# --- Forecasting ---
 torch>=2.2
 chronos-forecasting>=1.0
+
+# --- Data validation / models ---
 pydantic>=2.9
 
-# --- LLM layer ---
+# --- LLM ---
 anthropic>=0.40
 
-# --- API (serving — lightweight, see Dockerfile) ---
+# --- API ---
 fastapi>=0.115
 uvicorn[standard]>=0.32
-python-multipart>=0.0.9 
+python-multipart>=0.0.9
 
 # --- Automation ---
 schedule>=1.2
