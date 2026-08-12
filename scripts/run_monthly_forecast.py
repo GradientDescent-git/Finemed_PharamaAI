@@ -1,5 +1,6 @@
 import argparse
 import logging
+from finemed_ai.config.settings import Settings
 import sys
 from pathlib import Path
  
@@ -19,7 +20,7 @@ def main() -> int:
     parser.add_argument(
         "--silver-demand",
         type=Path,
-        default=Path("data/04_silver/demand_daily.parquet"),
+        default=Settings.DEMAND_FILE,
         help="Path to the silver-layer daily demand table (parquet or csv).",
     )
     parser.add_argument(

@@ -103,11 +103,9 @@ class SalesTransformer:
         
         log_step(logger,"Joining Sales Invoice and Sales Line...")
         
-        self.sales_df = merge_dimension(
+        self.sales_df = join_sales_invoice_line(
             self.sales_line_df,
-            self.sales_invoice_df,
-            fact_key="INVNO",
-            dimension_key="INVNO")
+            self.sales_invoice_df)
         
         # Join Salesperson
         log_step(
@@ -346,3 +344,13 @@ class SalesTransformer:
         
         logger.info(
             "Sales Silver Dataset saved successfully.")
+
+    def run(self, output_path: Path) -> None:
+        log_step(logger, "Running Sales Silver transformation pipeline...")
+        self.load_data()
+        self.join_dimensions()
+        self.clean_data()
+        self.business_transformations()
+        self.save(output_path)
+
+        logger.info("Sales Silver transformation pipeline completed successfully.")

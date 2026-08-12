@@ -235,7 +235,6 @@ class PredictorService:
             )
 
             point = getattr(quantiles, f"p{int(cfg.point_quantile * 100)}")
-            point = getattr(quantiles, f"p{int(cfg.point_quantile * 100)}")
  
             days.append(
                 ForecastDayResult(

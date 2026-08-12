@@ -68,6 +68,171 @@ def merge_dimension(fact_df: pd.DataFrame,dimension_df: pd.DataFrame,fact_key: s
             dimension_key)
         raise
 
+def merge_dimension_composite(
+    fact_df: pd.DataFrame,
+    dimension_df: pd.DataFrame,
+    fact_keys: list[str],
+    dimension_keys: list[str],
+    how: str = "left",
+) -> pd.DataFrame:
+
+    logger.info(
+        "Joining fact (%d rows) with dimension (%d rows) on %s -> %s",
+        len(fact_df),
+        len(dimension_df),
+        " + ".join(fact_keys),
+        " + ".join(dimension_keys),
+    )
+
+    try:
+        validate_columns_exist(
+            fact_df,
+            fact_keys,
+            logger=logger,
+            df_name="Fact Table",
+        )
+
+        validate_columns_exist(
+            dimension_df,
+            dimension_keys,
+            logger=logger,
+            df_name="Dimension Table",
+        )
+
+        dimension_df = dimension_df.copy()
+
+        duplicate_columns = [
+            col
+            for col in dimension_df.columns
+            if col in fact_df.columns and col not in dimension_keys
+        ]
+
+        dimension_df = dimension_df.drop(
+            columns=duplicate_columns,
+            errors="ignore",
+        )
+
+        merged_df = fact_df.merge(
+            dimension_df,
+            left_on=fact_keys,
+            right_on=dimension_keys,
+            how=how,
+            validate="many_to_one",
+        )
+
+        if fact_keys != dimension_keys:
+            merged_df = merged_df.drop(
+                columns=[
+                    col
+                    for col in dimension_keys
+                    if col not in fact_keys
+                ],
+                errors="ignore",
+            )
+
+        logger.info(
+            "Composite join completed successfully | rows=%d | columns=%d",
+            len(merged_df),
+            len(merged_df.columns),
+        )
+
+        return merged_df
+
+    except Exception:
+        logger.exception(
+            "Failed while performing composite join."
+        )
+        raise
+
+def merge_dimension_on_keys(
+    fact_df: pd.DataFrame,
+    dimension_df: pd.DataFrame,
+    fact_keys: list[str],
+    dimension_keys: list[str],
+    how: str = "left",
+) -> pd.DataFrame:
+    """
+    Generic merge function supporting composite business keys.
+    """
+
+    if len(fact_keys) != len(dimension_keys):
+        raise ValueError(
+            "fact_keys and dimension_keys must have the same length."
+        )
+
+    logger.info(
+        "Joining fact (%d rows) with dimension (%d rows) on %s -> %s",
+        len(fact_df),
+        len(dimension_df),
+        " + ".join(fact_keys),
+        " + ".join(dimension_keys),
+    )
+
+    try:
+        validate_columns_exist(
+            fact_df,
+            fact_keys,
+            logger=logger,
+            df_name="Fact Table",
+        )
+
+        validate_columns_exist(
+            dimension_df,
+            dimension_keys,
+            logger=logger,
+            df_name="Dimension Table",
+        )
+
+        # Remove overlapping columns from dimension except join keys
+        duplicate_columns = [
+            col
+            for col in dimension_df.columns
+            if col in fact_df.columns
+            and col not in dimension_keys
+        ]
+
+        dimension_df = dimension_df.drop(
+            columns=duplicate_columns,
+            errors="ignore",
+        )
+
+        merged_df = fact_df.merge(
+            dimension_df,
+            left_on=fact_keys,
+            right_on=dimension_keys,
+            how=how,
+            validate="many_to_one",
+        )
+
+        # Drop right-side join keys when names differ
+        columns_to_drop = [
+            right_key
+            for left_key, right_key in zip(fact_keys, dimension_keys)
+            if left_key != right_key
+        ]
+
+        if columns_to_drop:
+            merged_df = merged_df.drop(
+                columns=columns_to_drop,
+                errors="ignore",
+            )
+
+        logger.info(
+            "Composite join completed successfully | rows=%d | columns=%d",
+            len(merged_df),
+            len(merged_df.columns),
+        )
+
+        return merged_df
+
+    except Exception:
+        logger.exception(
+            "Failed while joining %s -> %s",
+            " + ".join(fact_keys),
+            " + ".join(dimension_keys),
+        )
+        raise
+
 
 # SALES WRAPPERS
 
@@ -76,13 +241,12 @@ def join_sales_invoice_line(
     sales_line_df: pd.DataFrame,
     sales_invoice_df: pd.DataFrame,
 ) -> pd.DataFrame:
-    return merge_dimension(
+    return merge_dimension_on_keys(
         sales_line_df,
         sales_invoice_df,
-        fact_key="INVNO",
-        dimension_key="INVNO",
+        fact_keys=["INVNO", "SOURCE_MONTH"],
+        dimension_keys=["INVNO", "SOURCE_MONTH"],
     )
-
 
 def join_sales_with_salesperson(
     sales_df: pd.DataFrame,

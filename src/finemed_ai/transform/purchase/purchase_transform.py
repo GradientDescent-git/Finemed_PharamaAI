@@ -19,6 +19,7 @@ from finemed_ai.transform.common.helper_functions import (
 
 from finemed_ai.transform.common.joins import (
     merge_dimension,
+    merge_dimension_composite,
 )
 
 logger = get_logger(__name__)
@@ -109,11 +110,11 @@ class PurchaseTransformer:
         
         log_step(logger, "Joining Purchase Header and Purchase Line...")
         
-        self.purchase_df = merge_dimension(
+        self.purchase_df = merge_dimension_composite(
             self.purchase_line_df,
             self.purchase_header_df,
-            fact_key="PINVNO",
-            dimension_key="PINVNO")
+            fact_keys=["PINVNO", "SOURCE_MONTH"],
+            dimension_keys=["PINVNO", "SOURCE_MONTH"])
         
         # Remove duplicate metadata columns created by first merge
         self.purchase_df = self.purchase_df.drop(

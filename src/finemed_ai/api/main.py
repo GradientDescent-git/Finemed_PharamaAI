@@ -259,7 +259,7 @@ def refresh(background_tasks: BackgroundTasks):
     """
     from finemed_ai.demand_forecasting.pipeline import run_monthly_forecast
  
-    silver_path = Path(os.environ.get("SILVER_DEMAND_PATH", "data/04_silver/demand_daily.parquet"))
+    silver_path = SILVER_DEMAND_PATH
     if not silver_path.exists():
         raise HTTPException(status_code=400, detail=f"Silver demand source not found: {silver_path}")
  

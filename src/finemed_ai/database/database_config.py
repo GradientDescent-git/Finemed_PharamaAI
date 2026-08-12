@@ -4,11 +4,13 @@ import os
 
 from dotenv import load_dotenv
 
-# Always load .env from the project root
+# Project root:
+# E:\Finemed_PharmaAI
 BASE_DIR = Path(__file__).resolve().parents[3]
 ENV_PATH = BASE_DIR / ".env"
 
-load_dotenv(dotenv_path=ENV_PATH)
+# Load the project's .env and allow it to override stale environment variables.
+load_dotenv(dotenv_path=ENV_PATH, override=True)
 
 
 @dataclass(frozen=True)
