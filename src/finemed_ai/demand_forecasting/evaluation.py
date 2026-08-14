@@ -57,6 +57,7 @@ def compute_metrics(actuals: np.ndarray, predictions: np.ndarray, p10s: Optional
     smape = float(np.mean(smape_array)) if len(actuals) > 0 else 0.0
     
     mbe = float(np.mean(predictions - actuals)) if len(actuals) > 0 else 0.0
+    absolute_error_sum = float(np.sum(abs_errors))
     
     coverage = 0.0
     if p10s is not None and p90s is not None and len(actuals) > 0:
@@ -66,12 +67,14 @@ def compute_metrics(actuals: np.ndarray, predictions: np.ndarray, p10s: Optional
     return {
         "total_actual": total_actual,
         "total_predicted": total_pred,
+        "total_absolute_error": absolute_error_sum,
+        "absolute_error_sum": absolute_error_sum,
         "wape_pct": round(wape, 2),
         "mae": round(mae, 2),
         "smape_pct": round(smape, 2),
         "mbe": round(mbe, 2),
         "coverage_pct": round(coverage, 2),
-    }
+        }
 
 
 class ForecastEvaluator:

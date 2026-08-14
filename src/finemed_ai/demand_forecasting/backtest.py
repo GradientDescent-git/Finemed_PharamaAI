@@ -22,8 +22,15 @@ logger = logging.getLogger(__name__)
 class BacktestConfig:
     horizon: int = 30
 
-    # Number of historical rolling evaluation windows.
-    n_windows: int = 4
+    # Primary evaluation cutoffs.
+    evaluation_cutoffs: tuple[str, ...] = (
+        "2025-11-30",
+        "2025-12-31",
+        "2026-01-31",
+        "2026-02-28",
+        "2026-03-31",
+        "2026-04-30",
+    )
 
     # Minimum history required before creating a backtest.
     min_history: int = 730
@@ -43,6 +50,8 @@ class BacktestResult:
     sample_count: int
     total_actual: float
     total_predicted: float
+    total_absolute_error: float
+    absolute_error_sum: float
     wape_pct: float
     mae: float
     smape_pct: float
@@ -167,6 +176,48 @@ def _make_rolling_cutoffs(
         for index in sorted(set(indices))
     ]
 
+def _make_fixed_cutoffs(
+    medicine_dates: pd.Series,
+    config: BacktestConfig,
+) -> List[pd.Timestamp]:
+
+    dates = (
+        pd.to_datetime(medicine_dates)
+        .drop_duplicates()
+        .sort_values()
+        .reset_index(drop=True)
+    )
+
+    if dates.empty:
+        return []
+
+    configured_cutoffs = [
+        pd.Timestamp(value)
+        for value in config.evaluation_cutoffs
+    ]
+
+    valid_cutoffs = []
+
+    for cutoff in configured_cutoffs:
+
+        history_count = (
+            dates <= cutoff
+        ).sum()
+
+        future_count = (
+            dates > cutoff
+        ).sum()
+
+        if history_count < config.min_history:
+            continue
+
+        if future_count < config.horizon:
+            continue
+
+        valid_cutoffs.append(cutoff)
+
+    return valid_cutoffs
+
 
 def _naive_forecast(
     history: pd.Series,
@@ -221,6 +272,150 @@ def _seasonal_naive_forecast(
         0.0,
     )
 
+def _croston_forecast(
+    history: pd.Series,
+    horizon: int,
+    alpha: float = 0.1,
+) -> np.ndarray:
+    """
+    Croston's method for intermittent demand.
+
+    Separately estimates:
+    - demand size when demand occurs
+    - interval between non-zero demands
+    """
+
+    y = history.to_numpy(dtype=float)
+
+    if len(y) == 0:
+        return np.zeros(horizon)
+
+    y = np.maximum(y, 0.0)
+
+    non_zero = np.flatnonzero(y > 0)
+
+    if len(non_zero) == 0:
+        return np.zeros(horizon)
+
+    first = non_zero[0]
+
+    demand_estimate = float(y[first])
+    interval_estimate = float(first + 1)
+
+    previous = first
+
+    for index in non_zero[1:]:
+        demand = float(y[index])
+        interval = float(index - previous)
+
+        demand_estimate += alpha * (
+            demand - demand_estimate
+        )
+
+        interval_estimate += alpha * (
+            interval - interval_estimate
+        )
+
+        previous = index
+
+    if interval_estimate <= 0:
+        return np.zeros(horizon)
+
+    forecast_value = (
+        demand_estimate / interval_estimate
+    )
+
+    return np.full(
+        horizon,
+        max(forecast_value, 0.0),
+        dtype=float,
+    )
+
+
+def _sba_forecast(
+    history: pd.Series,
+    horizon: int,
+    alpha: float = 0.1,
+) -> np.ndarray:
+    """
+    Syntetos-Boylan Approximation (SBA).
+
+    SBA applies a bias correction to Croston's forecast.
+    """
+
+    croston = _croston_forecast(
+        history,
+        horizon,
+        alpha,
+    )
+
+    correction = 1.0 - (alpha / 2.0)
+
+    return np.maximum(
+        croston * correction,
+        0.0,
+    )
+
+
+def _tsb_forecast(
+    history: pd.Series,
+    horizon: int,
+    alpha_demand: float = 0.1,
+    alpha_probability: float = 0.1,
+) -> np.ndarray:
+    """
+    Teunter-Syntetos-Babai (TSB) method.
+
+    Estimates:
+    - probability of demand occurrence
+    - size of demand when it occurs
+    """
+
+    y = history.to_numpy(dtype=float)
+
+    if len(y) == 0:
+        return np.zeros(horizon)
+
+    y = np.maximum(y, 0.0)
+
+    non_zero = np.flatnonzero(y > 0)
+
+    if len(non_zero) == 0:
+        return np.zeros(horizon)
+
+    first = non_zero[0]
+
+    demand_estimate = float(y[first])
+
+    probability = (
+        1.0 / float(first + 1)
+        if first >= 0
+        else 1.0
+    )
+
+    for index, demand in enumerate(y):
+
+        occurrence = 1.0 if demand > 0 else 0.0
+
+        probability += alpha_probability * (
+            occurrence - probability
+        )
+
+        if occurrence > 0:
+            demand_estimate += alpha_demand * (
+                float(demand) - demand_estimate
+            )
+
+    forecast_value = (
+        probability * demand_estimate
+    )
+
+    return np.full(
+        horizon,
+        max(forecast_value, 0.0),
+        dtype=float,
+    )
+
 
 def _evaluate_predictions(
     actual: np.ndarray,
@@ -240,46 +435,37 @@ def _chronos_forecast(
     history: pd.DataFrame,
     medicine_id: str,
     config: ForecastConfig,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+) -> Dict[str, np.ndarray]:
 
     result = predictor.forecast_medicine(
         medicine_id,
         history,
     )
 
-    predictions = np.array(
-        [
-            day.predicted_demand
-            for day in result.days
-        ],
-        dtype=float,
-    )
+    quantiles = {}
 
-    p10 = np.array(
-        [
-            day.quantiles.p10
-            for day in result.days
-        ],
-        dtype=float,
-    )
-
-    p90 = np.array(
-        [
-            day.quantiles.p90
-            for day in result.days
-        ],
-        dtype=float,
-    )
+    for level in (
+        "p10", "p20", "p30", "p40", "p50",
+        "p60", "p70", "p80", "p90",
+    ):
+        quantiles[level] = np.array(
+            [
+                getattr(day.quantiles, level)
+                for day in result.days
+            ],
+            dtype=float,
+        )
 
     expected_length = config.prediction_length
 
-    if len(predictions) != expected_length:
-        raise ValueError(
-            f"Chronos returned {len(predictions)} "
-            f"days instead of {expected_length}."
-        )
+    for level, values in quantiles.items():
+        if len(values) != expected_length:
+            raise ValueError(
+                f"Chronos {level} returned {len(values)} "
+                f"days instead of {expected_length}."
+            )
 
-    return predictions, p10, p90
+    return quantiles
 
 
 def run_backtest(
@@ -376,10 +562,9 @@ def run_backtest(
             }
         )
 
-        cutoffs = _make_rolling_cutoffs(
+        cutoffs = _make_fixed_cutoffs(
             chronos_df["timestamp"],
-            backtest_config,
-        )
+            backtest_config)
 
         if not cutoffs:
             continue
@@ -432,12 +617,14 @@ def run_backtest(
                     sample_count=len(actual),
                     total_actual=metrics["total_actual"],
                     total_predicted=metrics["total_predicted"],
+                    total_absolute_error=metrics["absolute_error_sum"],
+                    absolute_error_sum=metrics["absolute_error_sum"],
                     wape_pct=metrics["wape_pct"],
                     mae=metrics["mae"],
                     smape_pct=metrics["smape_pct"],
                     mbe=metrics["mbe"],
                     coverage_pct=0.0,
-                )
+                    )
             )
 
             # -------------------------------------------------------
@@ -465,62 +652,153 @@ def run_backtest(
                     sample_count=len(actual),
                     total_actual=metrics["total_actual"],
                     total_predicted=metrics["total_predicted"],
+                    total_absolute_error=metrics["absolute_error_sum"],
+                    absolute_error_sum=metrics["absolute_error_sum"],
                     wape_pct=metrics["wape_pct"],
                     mae=metrics["mae"],
                     smape_pct=metrics["smape_pct"],
                     mbe=metrics["mbe"],
                     coverage_pct=0.0,
-                )
+                    )
             )
+
+            # -------------------------------------------------------
+            # Croston
+            # # -------------------------------------------------------
+            croston_prediction = _croston_forecast(
+                history["target"],
+                backtest_config.horizon)
+
+            metrics = _evaluate_predictions(
+                actual,
+                croston_prediction)
+
+            results.append(
+                BacktestResult(
+                    model="croston",
+                    cutoff_date=cutoff,
+                    medicine_id=medicine_id,
+                    sample_count=len(actual),
+                    total_actual=metrics["total_actual"],
+                    total_predicted=metrics["total_predicted"],
+                    total_absolute_error=metrics["absolute_error_sum"],
+                    absolute_error_sum=metrics["absolute_error_sum"],
+                    wape_pct=metrics["wape_pct"],
+                    mae=metrics["mae"],
+                    smape_pct=metrics["smape_pct"],
+                    mbe=metrics["mbe"],
+                    coverage_pct=0.0))
+
+            # -------------------------------------------------------
+            # SBA
+            # -------------------------------------------------------
+            sba_prediction = _sba_forecast(
+                history["target"],
+                backtest_config.horizon)
+
+            metrics = _evaluate_predictions(
+                actual,
+                sba_prediction)
+
+            results.append(
+                BacktestResult(
+                    model="sba",
+                    cutoff_date=cutoff,
+                    medicine_id=medicine_id,
+                    sample_count=len(actual),
+                    total_actual=metrics["total_actual"],
+                    total_predicted=metrics["total_predicted"],
+                    total_absolute_error=metrics["absolute_error_sum"],
+                    absolute_error_sum=metrics["absolute_error_sum"],
+                    wape_pct=metrics["wape_pct"],
+                    mae=metrics["mae"],
+                    smape_pct=metrics["smape_pct"],
+                    mbe=metrics["mbe"],
+                    coverage_pct=0.0))
+
+            # -------------------------------------------------------
+            # TSB
+            # -------------------------------------------------------
+            tsb_prediction = _tsb_forecast(
+                history["target"],
+                backtest_config.horizon)
+
+            metrics = _evaluate_predictions(
+                actual,
+                tsb_prediction)
+
+            results.append(
+                BacktestResult(
+                    model="tsb",
+                    cutoff_date=cutoff,
+                    medicine_id=medicine_id,
+                    sample_count=len(actual),
+                    total_actual=metrics["total_actual"],
+                    total_predicted=metrics["total_predicted"],
+                    total_absolute_error=metrics["absolute_error_sum"],
+                    absolute_error_sum=metrics["absolute_error_sum"],
+                    wape_pct=metrics["wape_pct"],
+                    mae=metrics["mae"],
+                    smape_pct=metrics["smape_pct"],
+                    mbe=metrics["mbe"],
+                    coverage_pct=0.0))
 
             # -------------------------------------------------------
             # Chronos-2
             # -------------------------------------------------------
-
             try:
+                q = _chronos_forecast(
+                    predictor,
+                    history,
+                    medicine_id,
+                    forecast_config)
 
-                predictions, p10, p90 = (
-                    _chronos_forecast(
-                        predictor,
-                        history,
-                        medicine_id,
-                        forecast_config,
-                    )
-                )
+                # Evaluate every quantile as a possible point forecast.
+                for level in (
+                    "p50",
+                    "p60",
+                    "p70",
+                    "p80",
+                    "p90",
+                    ):
 
-                metrics = compute_metrics(
-                    actuals=actual,
-                    predictions=predictions,
-                    p10s=p10,
-                    p90s=p90,
-                )
+                    predictions = q[level]
+                    metrics = compute_metrics(
+                        actuals=actual,
+                        predictions=predictions,
+                        p10s=q["p10"],
+                        p90s=q["p90"])
 
-                results.append(
-                    BacktestResult(
-                        model="chronos-2",
-                        cutoff_date=cutoff,
-                        medicine_id=medicine_id,
-                        sample_count=len(actual),
-                        total_actual=metrics["total_actual"],
-                        total_predicted=metrics["total_predicted"],
-                        wape_pct=metrics["wape_pct"],
-                        mae=metrics["mae"],
-                        smape_pct=metrics["smape_pct"],
-                        mbe=metrics["mbe"],
-                        coverage_pct=metrics[
-                            "coverage_pct"
-                        ],
-                    )
-                )
-
+                    results.append(
+                        BacktestResult(
+                            model=f"chronos-2-{level.upper()}",
+                            cutoff_date=cutoff,
+                            medicine_id=medicine_id,
+                            sample_count=len(actual),
+                            total_actual=metrics["total_actual"],
+                            total_predicted=metrics["total_predicted"],
+                            total_absolute_error=metrics["absolute_error_sum"],
+                            absolute_error_sum=metrics["absolute_error_sum"],
+                            wape_pct=metrics["wape_pct"],
+                            mae=metrics["mae"],
+                            smape_pct=metrics["smape_pct"],
+                            mbe=metrics["mbe"],
+                            coverage_pct=metrics["coverage_pct"]))
             except Exception:
-
                 logger.exception(
                     "Chronos backtest failed for "
                     "medicine=%s cutoff=%s",
                     medicine_id,
-                    cutoff,
-                )
+                    cutoff)
+                
+
+    # ---------------------------------------------------------------
+    # Aggregate report
+    # ---------------------------------------------------------------
+
+    # ---------------------------------------------------------------
+    # Build raw results DataFrame
+    # ---------------------------------------------------------------
 
     if not results:
         raise RuntimeError(
@@ -536,7 +814,7 @@ def run_backtest(
                 "Sample_Count": r.sample_count,
                 "Total_Actual": r.total_actual,
                 "Total_Predicted": r.total_predicted,
-                "WAPE_Pct": r.wape_pct,
+                "Total_Absolute_Error": r.absolute_error_sum,
                 "WAPE_Pct": r.wape_pct,
                 "MAE": r.mae,
                 "sMAPE_Pct": r.smape_pct,
@@ -574,34 +852,15 @@ def run_backtest(
         result_df
         .groupby("Model")
         .agg(
-            Windows=(
-                "Cutoff_Date",
-                "nunique",
-            ),
-            Medicines=(
-                "Medicine_ID",
-                "nunique",
-            ),
-            Samples=(
-                "Sample_Count",
-                "sum",
-            ),
-            WAPE_Pct=(
-                "WAPE_Pct",
-                "mean",
-            ),
-            MAE=(
-                "MAE",
-                "mean",
-            ),
-            sMAPE_Pct=(
-                "sMAPE_Pct",
-                "mean",
-            ),
-            MBE=(
-                "MBE",
-                "mean",
-            ),
+            Windows=("Cutoff_Date", "size"),
+            Medicines=("Medicine_ID", "nunique"),
+            Samples=("Sample_Count", "sum"),
+            Total_Actual=("Total_Actual", "sum"),
+            Total_Predicted=("Total_Predicted", "sum"),
+            Total_Absolute_Error=("Total_Absolute_Error", "sum"),
+            MAE=("MAE", "mean"),
+            sMAPE_Pct=("sMAPE_Pct", "mean"),
+            MBE=("MBE", "mean"),
             P10_P90_Coverage_Pct=(
                 "P10_P90_Coverage_Pct",
                 "mean",
@@ -609,6 +868,16 @@ def run_backtest(
         )
         .reset_index()
     )
+
+    summary["WAPE_Pct"] = (
+        summary["Total_Absolute_Error"]
+        / summary["Total_Actual"]
+        * 100.0
+    )
+    summary["WAPE_Pct"] = (
+        summary["Total_Absolute_Error"] 
+        / 
+        summary["Total_Actual"]* 100.0)
 
     summary_path = (
         output_dir

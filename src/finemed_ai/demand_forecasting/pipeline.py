@@ -16,59 +16,125 @@ from finemed_ai.demand_forecasting.schemas import BatchForecastRunResult
 logger = logging.getLogger(__name__)
  
  
-def _load_and_prepare_daily_demand(
-    silver_demand_path: Path,
-    id_col: str = "MDCODE",
-    date_col: str = "INVDT",
-    qty_col: str = "Demand_Qty",
+def _load_forecasting_series(
+    forecasting_series_path: Path,
 ) -> pd.DataFrame:
     """
-    Reproduces notebook Module 2 (Daily Timeseries Generation):
-    fills a complete daily calendar per medicine so Chronos never sees gaps.
- 
-    Reads parquet or csv transparently based on suffix.
+    Load the validated Chronos forecasting series.
+
+    Input contract:
+        MDCODE
+        INVDT
+        Demand_Qty
+
+    Output contract:
+        item_id
+        timestamp
+        target
     """
-    if silver_demand_path.suffix == ".parquet":
-        raw = pd.read_parquet(silver_demand_path)
-    else:
-        raw = pd.read_csv(silver_demand_path)
- 
-    missing = {id_col, date_col, qty_col} - set(raw.columns)
-    if missing:
-        raise ValueError(
-            f"Silver demand source missing columns {missing}. "
-            f"Update _load_and_prepare_daily_demand()'s column mapping to match "
-            f"your actual silver schema."
+
+    if not forecasting_series_path.exists():
+        raise FileNotFoundError(
+            f"Forecasting series does not exist: "
+            f"{forecasting_series_path}"
         )
- 
-    base = raw[[id_col, date_col, qty_col]].copy()
-    base[date_col] = pd.to_datetime(base[date_col])
-    base = base.sort_values([id_col, date_col]).reset_index(drop=True)
- 
-    daily_frames = []
-    for medicine_id, med_df in base.groupby(id_col):
-        calendar = pd.DataFrame({
-            date_col: pd.date_range(med_df[date_col].min(), med_df[date_col].max(), freq="D")
-        })
-        calendar[id_col] = medicine_id
- 
-        merged = calendar.merge(med_df, on=[id_col, date_col], how="left")
-        merged[qty_col] = merged[qty_col].fillna(0)
-        daily_frames.append(merged)
- 
-    daily = pd.concat(daily_frames, ignore_index=True)
- 
-    chronos_df = daily.rename(columns={
-        id_col: "item_id",
-        date_col: "timestamp",
-        qty_col: "target",
-    })
-    chronos_df["item_id"] = chronos_df["item_id"].astype(str)
-    return chronos_df.sort_values(["item_id", "timestamp"]).reset_index(drop=True)
- 
- 
+
+    df = pd.read_parquet(forecasting_series_path)
+
+    required_columns = {
+        "MDCODE",
+        "INVDT",
+        "Demand_Qty",
+    }
+
+    missing_columns = required_columns - set(df.columns)
+
+    if missing_columns:
+        raise ValueError(
+            "Forecasting series missing required columns: "
+            f"{sorted(missing_columns)}"
+        )
+
+    df = df[
+        ["MDCODE", "INVDT", "Demand_Qty"]
+    ].copy()
+
+    df["MDCODE"] = (
+        df["MDCODE"]
+        .astype(str)
+        .str.strip()
+    )
+
+    df["INVDT"] = pd.to_datetime(
+        df["INVDT"],
+        errors="coerce",
+    )
+
+    df["Demand_Qty"] = pd.to_numeric(
+        df["Demand_Qty"],
+        errors="coerce",
+    )
+
+    if df["MDCODE"].eq("").any():
+        raise ValueError(
+            "Forecasting series contains empty MDCODE values."
+        )
+
+    if df["INVDT"].isna().any():
+        raise ValueError(
+            "Forecasting series contains invalid INVDT values."
+        )
+
+    if df["Demand_Qty"].isna().any():
+        raise ValueError(
+            "Forecasting series contains NULL Demand_Qty."
+        )
+
+    if (df["Demand_Qty"] < 0).any():
+        raise ValueError(
+            "Forecasting series contains negative demand."
+        )
+
+    duplicates = df.duplicated(
+        ["MDCODE", "INVDT"]
+    ).sum()
+
+    if duplicates:
+        raise ValueError(
+            f"Forecasting series contains {duplicates} "
+            "duplicate MDCODE/INVDT rows."
+        )
+
+    chronos_df = df.rename(
+        columns={
+            "MDCODE": "item_id",
+            "INVDT": "timestamp",
+            "Demand_Qty": "target",
+        }
+    )
+
+    chronos_df = (
+        chronos_df
+        .sort_values(
+            ["item_id", "timestamp"]
+        )
+        .reset_index(drop=True)
+    )
+
+    logger.info(
+        "Loaded validated forecasting series: "
+        "%d rows, %d medicines, %s -> %s",
+        len(chronos_df),
+        chronos_df["item_id"].nunique(),
+        chronos_df["timestamp"].min().date(),
+        chronos_df["timestamp"].max().date(),
+    )
+
+    return chronos_df
+
+
 def run_monthly_forecast(
-    silver_demand_path: Path,
+    forecasting_series_path: Path,
     output_dir: Path,
     config: ForecastConfig = DEFAULT_CONFIG,
     predictor: Optional[PredictorService] = None,
@@ -91,7 +157,7 @@ def run_monthly_forecast(
     started_at = datetime.now(timezone.utc)
     logger.info("Starting forecast run %s", run_id)
  
-    history_df = _load_and_prepare_daily_demand(silver_demand_path)
+    history_df = _load_forecasting_series(forecasting_series_path)
     medicine_ids = sorted(history_df["item_id"].unique())
     logger.info("Loaded daily demand for %d medicines", len(medicine_ids))
  
