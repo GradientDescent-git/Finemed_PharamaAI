@@ -11,12 +11,26 @@ from finemed_ai.demand_forecasting.store import ForecastStore
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     rows = [{
-        "Medicine_ID": "42", "Forecast_Date": pd.Timestamp("2025-06-01"),
-        "Predicted_Demand": 10.0, "P10": 5.0, "P20": 6.0, "P30": 7.0, "P40": 8.0,
-        "P50": 10.0, "P60": 12.0, "P70": 14.0, "P80": 16.0, "P90": 18.0,
-        "Context_Length_Used": 730, "Model_ID": "amazon/chronos-2",
-        "Generated_At": datetime.now(),
-    }]
+        "Medicine_ID": "42",
+        "Forecast_Date": pd.Timestamp("2025-06-01"),
+        "Predicted_Demand": 10.0,
+
+        "P10": 5.0,
+        "P20": 6.0,
+        "P30": 7.0,
+        "P40": 8.0,
+        "P50": 10.0,
+        "P60": 12.0,
+        "P70": 14.0,
+        "P80": 16.0,
+        "P90": 18.0,
+
+        "Context_Length_Used": 730,
+        "Prediction_Length": 30,
+        "Model_ID": "amazon/chronos-2",
+        "Selected_Model": "chronos-2-P50",
+
+        "Generated_At": datetime.now()}]
     output_dir = tmp_path / "forecasts"
     output_dir.mkdir()
     pd.DataFrame(rows).to_parquet(output_dir / "latest.parquet")

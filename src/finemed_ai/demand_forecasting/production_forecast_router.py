@@ -29,32 +29,71 @@ TSB_MODEL = "tsb"
 
 
 # ============================================================================
-# SOURCE DATA SCHEMA
+# VALIDATED TSB PARAMETERS
 # ============================================================================
 
-# Actual Module 2 / Silver daily demand dataset:
-#
-#   MDCODE
-#   INVDT
-#   Demand_Qty
-#
-# Chronos internally expects:
-#
-#   item_id
-#   timestamp
-#   target
-#
-# The production router therefore normalizes the Silver schema once at
-# its boundary instead of forcing every downstream component to know
-# about the ERP/Silver naming convention.
+TSB_ALPHA_DEMAND = 0.1
+TSB_ALPHA_PROBABILITY = 0.1
+
+
+# ============================================================================
+# SOURCE DATA SCHEMA
+# ============================================================================
 
 SOURCE_ID_COLUMN = "MDCODE"
 SOURCE_TIMESTAMP_COLUMN = "INVDT"
 SOURCE_TARGET_COLUMN = "Demand_Qty"
 
+
+# ============================================================================
+# INTERNAL FORECASTING SCHEMA
+# ============================================================================
+
 INTERNAL_ID_COLUMN = "item_id"
 INTERNAL_TIMESTAMP_COLUMN = "timestamp"
 INTERNAL_TARGET_COLUMN = "target"
+
+
+# ============================================================================
+# PRODUCTION OUTPUT SCHEMA
+# ============================================================================
+
+OUTPUT_COLUMNS = [
+    "Medicine_ID",
+    "Forecast_Date",
+    "Predicted_Demand",
+    "P10",
+    "P20",
+    "P30",
+    "P40",
+    "P50",
+    "P60",
+    "P70",
+    "P80",
+    "P90",
+    "Selected_Model",
+    "Forecast_Type",
+    "Routing_Rule",
+    "Validation_Advantage_Pct",
+    "Routing_Reason",
+    "Context_Length_Used",
+    "Prediction_Length",
+    "Model_ID",
+    "Generated_At",
+]
+
+
+TSB_QUANTILES = (
+    "P10",
+    "P20",
+    "P30",
+    "P40",
+    "P50",
+    "P60",
+    "P70",
+    "P80",
+    "P90",
+)
 
 
 # ============================================================================
@@ -67,8 +106,10 @@ class RoutingDecision:
     """
     Immutable production routing decision.
 
-    The decision is made entirely from validation-only information and is
-    subsequently applied to future production forecasts.
+    The decision is based only on validation-derived information.
+
+    Production forecast generation itself must never recompute model
+    performance or optimize the routing threshold.
     """
 
     medicine_id: str
@@ -79,7 +120,7 @@ class RoutingDecision:
 
 
 # ============================================================================
-# PRODUCTION ROUTER
+# PRODUCTION FORECAST ROUTER
 # ============================================================================
 
 
@@ -95,14 +136,14 @@ class ProductionForecastRouter:
         otherwise
             -> TSB
 
-    IMPORTANT
-    ---------
-    The threshold is NOT optimized here.
+    Important:
 
-    The 30% threshold was selected during validation and subsequently
-    evaluated on untouched holdout data.
-
-    Therefore this production component treats the threshold as frozen.
+    - The threshold is not optimized here.
+    - Validation metrics must come from the validation stage.
+    - Holdout/test information must never be supplied to this router
+      for routing decisions.
+    - Chronos is used exactly as validated: P50, context 730, horizon 30.
+    - No unvalidated post-hoc scaling/bias correction is applied here.
     """
 
     def __init__(
@@ -117,20 +158,27 @@ class ProductionForecastRouter:
         )
 
     # ========================================================================
-    # DATA NORMALIZATION
+    # DATA VALIDATION
     # ========================================================================
 
     @staticmethod
-    def _validate_source_history(history_df: pd.DataFrame) -> None:
+    def _validate_source_history(
+        history_df: pd.DataFrame,
+    ) -> None:
         """
-        Validate the actual Silver daily-demand schema.
+        Validate the Silver daily-demand dataframe.
 
-        Expected:
+        Required columns:
 
             MDCODE
             INVDT
             Demand_Qty
         """
+
+        if not isinstance(history_df, pd.DataFrame):
+            raise TypeError(
+                "history_df must be a pandas DataFrame."
+            )
 
         required = {
             SOURCE_ID_COLUMN,
@@ -144,17 +192,25 @@ class ProductionForecastRouter:
             raise ValueError(
                 "History dataframe is missing required Silver columns: "
                 f"{sorted(missing)}. "
-                f"Expected columns: "
+                "Expected columns: "
                 f"{[SOURCE_ID_COLUMN, SOURCE_TIMESTAMP_COLUMN, SOURCE_TARGET_COLUMN]}"
             )
+
+        if history_df.empty:
+            raise InsufficientHistoryError(
+                "History dataframe is empty."
+            )
+
+    # ========================================================================
+    # HISTORY PREPARATION
+    # ========================================================================
 
     @staticmethod
     def _prepare_history(
         history_df: pd.DataFrame,
     ) -> pd.DataFrame:
         """
-        Convert the actual Silver daily-demand dataframe into the internal
-        Chronos schema.
+        Convert Silver demand data into the internal forecasting schema.
 
         Input:
 
@@ -168,21 +224,26 @@ class ProductionForecastRouter:
             timestamp
             target
 
-        The method also:
+        Processing:
 
-        - normalizes medicine IDs to strings
-        - converts timestamps to datetime
-        - converts demand to numeric
-        - removes invalid rows
-        - sorts by medicine/date
-        - aggregates duplicate medicine/date observations
-        - creates a complete daily calendar per medicine
-
-        The complete-calendar step is important because Chronos-2 expects
-        regularly spaced observations.
+        1. Validate source schema.
+        2. Remove missing source values.
+        3. Normalize medicine IDs.
+        4. Parse timestamps.
+        5. Remove timezone information safely.
+        6. Normalize timestamps to calendar-day granularity.
+        7. Convert demand to numeric.
+        8. Reject invalid rows.
+        9. Reject/clip negative demand.
+        10. Aggregate duplicate medicine/date observations.
+        11. Complete the daily calendar for each medicine.
+        12. Fill missing calendar dates with zero demand.
+        13. Sort by medicine/date.
         """
 
-        ProductionForecastRouter._validate_source_history(history_df)
+        ProductionForecastRouter._validate_source_history(
+            history_df
+        )
 
         df = history_df[
             [
@@ -192,9 +253,36 @@ class ProductionForecastRouter:
             ]
         ].copy()
 
-        # ------------------------------------------------------------------
-        # Normalize identifiers
-        # ------------------------------------------------------------------
+        # --------------------------------------------------------------------
+        # Remove missing source values before string conversion.
+        # --------------------------------------------------------------------
+
+        before = len(df)
+
+        df = df.dropna(
+            subset=[
+                SOURCE_ID_COLUMN,
+                SOURCE_TIMESTAMP_COLUMN,
+                SOURCE_TARGET_COLUMN,
+            ]
+        ).copy()
+
+        removed = before - len(df)
+
+        if removed:
+            logger.warning(
+                "Removed %d rows with missing source values.",
+                removed,
+            )
+
+        if df.empty:
+            raise InsufficientHistoryError(
+                "No usable rows remain after removing missing source values."
+            )
+
+        # --------------------------------------------------------------------
+        # Normalize medicine IDs.
+        # --------------------------------------------------------------------
 
         df[INTERNAL_ID_COLUMN] = (
             df[SOURCE_ID_COLUMN]
@@ -202,37 +290,78 @@ class ProductionForecastRouter:
             .str.strip()
         )
 
-        # ------------------------------------------------------------------
-        # Normalize dates
-        # ------------------------------------------------------------------
+        empty_ids = df[INTERNAL_ID_COLUMN].eq("")
 
-        df[INTERNAL_TIMESTAMP_COLUMN] = pd.to_datetime(
+        if empty_ids.any():
+            count = int(empty_ids.sum())
+
+            logger.warning(
+                "Removed %d rows with empty medicine IDs.",
+                count,
+            )
+
+            df = df.loc[~empty_ids].copy()
+
+        if df.empty:
+            raise InsufficientHistoryError(
+                "No usable medicine IDs remain after normalization."
+            )
+
+        # --------------------------------------------------------------------
+        # Parse timestamps.
+        # --------------------------------------------------------------------
+
+        parsed_dates = pd.to_datetime(
             df[SOURCE_TIMESTAMP_COLUMN],
             errors="coerce",
         )
 
-        # Remove timezone if present. The forecasting pipeline operates on
-        # daily ERP dates rather than timezone-aware timestamps.
-        if pd.api.types.is_datetime64tz_dtype(
+        invalid_dates = parsed_dates.isna()
+
+        if invalid_dates.any():
+            count = int(invalid_dates.sum())
+
+            logger.warning(
+                "Removed %d rows with invalid timestamps.",
+                count,
+            )
+
+        df[INTERNAL_TIMESTAMP_COLUMN] = parsed_dates
+
+        # --------------------------------------------------------------------
+        # Normalize timezone safely.
+        #
+        # Using utc=True first gives us one deterministic representation
+        # even when input contains mixed timezone-aware values.
+        # --------------------------------------------------------------------
+
+        if (
             df[INTERNAL_TIMESTAMP_COLUMN]
+            .dt
+            .tz is not None
         ):
             df[INTERNAL_TIMESTAMP_COLUMN] = (
                 df[INTERNAL_TIMESTAMP_COLUMN]
                 .dt.tz_localize(None)
             )
 
-        # ------------------------------------------------------------------
-        # Normalize target
-        # ------------------------------------------------------------------
+        df[INTERNAL_TIMESTAMP_COLUMN] = (
+            df[INTERNAL_TIMESTAMP_COLUMN]
+            .dt.normalize()
+        )
+
+        # --------------------------------------------------------------------
+        # Numeric demand.
+        # --------------------------------------------------------------------
 
         df[INTERNAL_TARGET_COLUMN] = pd.to_numeric(
             df[SOURCE_TARGET_COLUMN],
             errors="coerce",
         )
 
-        # ------------------------------------------------------------------
-        # Remove invalid records
-        # ------------------------------------------------------------------
+        # --------------------------------------------------------------------
+        # Remove invalid normalized rows.
+        # --------------------------------------------------------------------
 
         before = len(df)
 
@@ -248,14 +377,27 @@ class ProductionForecastRouter:
 
         if removed:
             logger.warning(
-                "Removed %d invalid history rows during production "
-                "forecast preparation.",
+                "Removed %d invalid rows during forecast preparation.",
                 removed,
             )
 
-        # Demand cannot be negative for this production demand series.
+        if df.empty:
+            raise InsufficientHistoryError(
+                "No usable demand history remains after normalization."
+            )
+
+        # --------------------------------------------------------------------
+        # Demand integrity.
+        #
+        # Demand cannot be negative.
+        # --------------------------------------------------------------------
+
+        negative_mask = (
+            df[INTERNAL_TARGET_COLUMN] < 0
+        )
+
         negative_count = int(
-            (df[INTERNAL_TARGET_COLUMN] < 0).sum()
+            negative_mask.sum()
         )
 
         if negative_count:
@@ -270,24 +412,23 @@ class ProductionForecastRouter:
                 .clip(lower=0.0)
             )
 
-        # ------------------------------------------------------------------
-        # Aggregate duplicate medicine/date observations
-        # ------------------------------------------------------------------
+        # --------------------------------------------------------------------
+        # Aggregate duplicate medicine/date rows.
+        # --------------------------------------------------------------------
 
-        duplicate_mask = df.duplicated(
-            subset=[
-                INTERNAL_ID_COLUMN,
-                INTERNAL_TIMESTAMP_COLUMN,
-            ],
-            keep=False,
+        duplicate_count = int(
+            df.duplicated(
+                subset=[
+                    INTERNAL_ID_COLUMN,
+                    INTERNAL_TIMESTAMP_COLUMN,
+                ],
+                keep=False,
+            ).sum()
         )
 
-        duplicate_count = int(duplicate_mask.sum())
-
         if duplicate_count:
-            logger.warning(
-                "Found %d duplicate medicine/date rows. "
-                "Aggregating Demand_Qty by day.",
+            logger.info(
+                "Aggregating %d duplicate medicine/date observations.",
                 duplicate_count,
             )
 
@@ -298,45 +439,74 @@ class ProductionForecastRouter:
                     INTERNAL_TIMESTAMP_COLUMN,
                 ],
                 as_index=False,
+                sort=False,
             )[INTERNAL_TARGET_COLUMN]
             .sum()
         )
 
-        # ------------------------------------------------------------------
-        # Complete daily calendar per medicine
-        # ------------------------------------------------------------------
+        if df.empty:
+            raise InsufficientHistoryError(
+                "No observations remain after daily aggregation."
+            )
 
-        completed = []
+        # --------------------------------------------------------------------
+        # Complete daily calendar independently for every medicine.
+        #
+        # IMPORTANT:
+        #
+        # This preserves the validated project assumption that a missing
+        # calendar date inside an observed medicine history represents
+        # zero demand.
+        # --------------------------------------------------------------------
+
+        completed: list[pd.DataFrame] = []
 
         for medicine_id, group in df.groupby(
             INTERNAL_ID_COLUMN,
             sort=False,
         ):
+
             group = group.sort_values(
                 INTERNAL_TIMESTAMP_COLUMN
-            )
+            ).copy()
 
-            start = group[INTERNAL_TIMESTAMP_COLUMN].min()
-            end = group[INTERNAL_TIMESTAMP_COLUMN].max()
+            start_date = group[
+                INTERNAL_TIMESTAMP_COLUMN
+            ].min()
+
+            end_date = group[
+                INTERNAL_TIMESTAMP_COLUMN
+            ].max()
+
+            if pd.isna(start_date) or pd.isna(end_date):
+                continue
 
             full_dates = pd.date_range(
-                start=start,
-                end=end,
+                start=start_date,
+                end=end_date,
                 freq="D",
             )
 
             group = (
-                group.set_index(INTERNAL_TIMESTAMP_COLUMN)
+                group.set_index(
+                    INTERNAL_TIMESTAMP_COLUMN
+                )
                 .reindex(full_dates)
             )
 
             group.index.name = INTERNAL_TIMESTAMP_COLUMN
 
-            group[INTERNAL_ID_COLUMN] = medicine_id
+            group[INTERNAL_ID_COLUMN] = str(
+                medicine_id
+            ).strip()
 
             group[INTERNAL_TARGET_COLUMN] = (
-                group[INTERNAL_TARGET_COLUMN]
+                pd.to_numeric(
+                    group[INTERNAL_TARGET_COLUMN],
+                    errors="coerce",
+                )
                 .fillna(0.0)
+                .clip(lower=0.0)
             )
 
             completed.append(
@@ -351,7 +521,7 @@ class ProductionForecastRouter:
 
         if not completed:
             raise InsufficientHistoryError(
-                "No usable demand history remains after data validation."
+                "No usable medicine histories remain after calendar completion."
             )
 
         result = pd.concat(
@@ -362,6 +532,16 @@ class ProductionForecastRouter:
         result[INTERNAL_ID_COLUMN] = (
             result[INTERNAL_ID_COLUMN]
             .astype(str)
+            .str.strip()
+        )
+
+        result[INTERNAL_TARGET_COLUMN] = (
+            pd.to_numeric(
+                result[INTERNAL_TARGET_COLUMN],
+                errors="coerce",
+            )
+            .fillna(0.0)
+            .clip(lower=0.0)
         )
 
         result = result.sort_values(
@@ -371,10 +551,16 @@ class ProductionForecastRouter:
             ]
         ).reset_index(drop=True)
 
-        return result
+        return result[
+            [
+                INTERNAL_ID_COLUMN,
+                INTERNAL_TIMESTAMP_COLUMN,
+                INTERNAL_TARGET_COLUMN,
+            ]
+        ]
 
     # ========================================================================
-    # ROUTING
+    # VALIDATION ADVANTAGE
     # ========================================================================
 
     @staticmethod
@@ -383,44 +569,68 @@ class ProductionForecastRouter:
         validation_tsb_ae: float,
     ) -> float:
         """
-        Calculate percentage improvement of Chronos AE over TSB AE.
+        Calculate Chronos percentage improvement over TSB.
 
-        Positive value:
-            Chronos has lower absolute error.
+            advantage =
+                (TSB_AE - Chronos_AE) / TSB_AE * 100
 
-        Example:
+        Positive value means Chronos has lower AE.
 
-            TSB AE      = 100
-            Chronos AE  = 70
-
-            advantage = 30%
+        This function is intended for validation/routing-table generation,
+        not for evaluating production forecasts.
         """
 
-        validation_chronos_ae = float(validation_chronos_ae)
-        validation_tsb_ae = float(validation_tsb_ae)
+        chronos_ae = float(
+            validation_chronos_ae
+        )
 
-        if validation_tsb_ae == 0:
+        tsb_ae = float(
+            validation_tsb_ae
+        )
+
+        if not np.isfinite(chronos_ae):
+            return np.nan
+
+        if not np.isfinite(tsb_ae):
+            return np.nan
+
+        if chronos_ae < 0:
+            return np.nan
+
+        if tsb_ae <= 0:
             return np.nan
 
         return (
-            (validation_tsb_ae - validation_chronos_ae)
-            / validation_tsb_ae
+            (tsb_ae - chronos_ae)
+            / tsb_ae
             * 100.0
         )
+
+    # ========================================================================
+    # MODEL SELECTION
+    # ========================================================================
 
     @staticmethod
     def select_model(
         validation_advantage_pct: Optional[float],
     ) -> str:
         """
-        Apply the frozen production routing policy.
+        Apply the frozen routing policy.
+
+            advantage >= 30%
+                -> Chronos-2 P50
+
+            otherwise
+                -> TSB
         """
 
         if validation_advantage_pct is None:
             return TSB_MODEL
 
         try:
-            advantage = float(validation_advantage_pct)
+            advantage = float(
+                validation_advantage_pct
+            )
         except (TypeError, ValueError):
             return TSB_MODEL
 
@@ -438,68 +648,77 @@ class ProductionForecastRouter:
         validation_advantage_pct: Optional[float],
     ) -> RoutingDecision:
         """
-        Build an auditable routing decision.
+        Build an auditable immutable routing decision.
         """
 
-        selected_model = ProductionForecastRouter.select_model(
-            validation_advantage_pct
+        medicine_id = str(
+            medicine_id
+        ).strip()
+
+        if not medicine_id:
+            raise ValueError(
+                "medicine_id cannot be empty."
+            )
+
+        selected_model = (
+            ProductionForecastRouter.select_model(
+                validation_advantage_pct
+            )
         )
+
+        normalized_advantage: Optional[float]
+
+        if validation_advantage_pct is None:
+            normalized_advantage = None
+
+        else:
+            try:
+                value = float(
+                    validation_advantage_pct
+                )
+
+                normalized_advantage = (
+                    value
+                    if np.isfinite(value)
+                    else None
+                )
+
+            except (TypeError, ValueError):
+                normalized_advantage = None
 
         if selected_model == CHRONOS_MODEL:
 
             reason = (
                 f"Validation advantage "
-                f"{float(validation_advantage_pct):.2f}% >= "
+                f"{normalized_advantage:.2f}% >= "
                 f"{VALIDATION_ADVANTAGE_THRESHOLD:.0f}% threshold"
+            )
+
+        elif normalized_advantage is None:
+
+            reason = (
+                "No valid validation advantage available; "
+                "using TSB fallback"
             )
 
         else:
 
-            if validation_advantage_pct is None:
-
-                reason = (
-                    "No validated Chronos advantage available; "
-                    "using TSB fallback"
-                )
-
-            else:
-
-                try:
-                    advantage = float(validation_advantage_pct)
-                except (TypeError, ValueError):
-
-                    reason = (
-                        "Invalid validation advantage; "
-                        "using TSB fallback"
-                    )
-
-                else:
-
-                    if not np.isfinite(advantage):
-
-                        reason = (
-                            "Invalid validation advantage; "
-                            "using TSB fallback"
-                        )
-
-                    else:
-
-                        reason = (
-                            f"Validation advantage "
-                            f"{advantage:.2f}% < "
-                            f"{VALIDATION_ADVANTAGE_THRESHOLD:.0f}% threshold"
-                        )
+            reason = (
+                f"Validation advantage "
+                f"{normalized_advantage:.2f}% < "
+                f"{VALIDATION_ADVANTAGE_THRESHOLD:.0f}% threshold"
+            )
 
         return RoutingDecision(
-            medicine_id=str(medicine_id),
+            medicine_id=medicine_id,
             selected_model=selected_model,
             routing_rule=ROUTING_RULE_NAME,
-            validation_advantage_pct=validation_advantage_pct,
+            validation_advantage_pct=normalized_advantage,
             reason=reason,
         )
 
     # ========================================================================
-    # TSB FORECAST
+    # VALIDATED TSB
     # ========================================================================
 
     @staticmethod
@@ -509,30 +728,23 @@ class ProductionForecastRouter:
         prediction_length: int,
         timestamp_column: str = INTERNAL_TIMESTAMP_COLUMN,
         target_column: str = INTERNAL_TARGET_COLUMN,
-        alpha: float = 0.1,
-        beta: float = 0.1,
+        alpha_demand: float = TSB_ALPHA_DEMAND,
+        alpha_probability: float = TSB_ALPHA_PROBABILITY,
     ) -> pd.DataFrame:
         """
-        Production TSB implementation.
+        Generate the validated TSB point forecast.
 
-        Teunter-Syntetos-Babai separates intermittent demand into:
+        Validated behavior:
 
-            1. Probability of demand occurrence
-            2. Demand size when demand occurs
+        - demand estimate initialized using first non-zero demand
+        - probability initialized as:
+              1 / (first_nonzero_index + 1)
+        - probability updated at every observation
+        - demand estimate updated only on non-zero demand
+        - final forecast:
+              probability * demand_estimate
 
-        The final forecast is:
-
-            forecast = probability * demand_size
-
-        This implementation assumes `history_df` has already been normalized
-        to:
-
-            item_id
-            timestamp
-            target
-
-        It is intentionally simple and deterministic because this is the
-        validated production fallback model.
+        TSB is a point forecast and does not produce calibrated quantiles.
         """
 
         if prediction_length <= 0:
@@ -540,25 +752,59 @@ class ProductionForecastRouter:
                 "prediction_length must be greater than zero."
             )
 
-        if not (0.0 < alpha <= 1.0):
+        if not (
+            0.0 < alpha_demand <= 1.0
+        ):
             raise ValueError(
-                "alpha must be in the interval (0, 1]."
+                "alpha_demand must be in the interval (0, 1]."
             )
 
-        if not (0.0 < beta <= 1.0):
+        if not (
+            0.0 < alpha_probability <= 1.0
+        ):
             raise ValueError(
-                "beta must be in the interval (0, 1]."
+                "alpha_probability must be in the interval (0, 1]."
             )
 
-        item_id = str(medicine_id)
+        item_id = str(
+            medicine_id
+        ).strip()
 
-        if INTERNAL_ID_COLUMN not in history_df.columns:
+        if not item_id:
             raise ValueError(
-                f"TSB history must contain '{INTERNAL_ID_COLUMN}'."
+                "medicine_id cannot be empty."
+            )
+
+        if not isinstance(
+            history_df,
+            pd.DataFrame,
+        ):
+            raise TypeError(
+                "history_df must be a pandas DataFrame."
+            )
+
+        required = {
+            INTERNAL_ID_COLUMN,
+            timestamp_column,
+            target_column,
+        }
+
+        missing = (
+            required
+            - set(history_df.columns)
+        )
+
+        if missing:
+            raise ValueError(
+                "TSB history is missing required columns: "
+                f"{sorted(missing)}"
             )
 
         history = history_df[
-            history_df[INTERNAL_ID_COLUMN].astype(str) == item_id
+            history_df[INTERNAL_ID_COLUMN]
+            .astype(str)
+            .str.strip()
+            == item_id
         ].copy()
 
         if history.empty:
@@ -566,30 +812,99 @@ class ProductionForecastRouter:
                 f"No history for medicine_id={item_id}"
             )
 
-        history = history.sort_values(
-            timestamp_column
+        # --------------------------------------------------------------------
+        # Normalize timestamp and demand.
+        # --------------------------------------------------------------------
+
+        history[timestamp_column] = pd.to_datetime(
+            history[timestamp_column],
+            errors="coerce",
         )
 
-        y = pd.to_numeric(
+        history[target_column] = pd.to_numeric(
             history[target_column],
             errors="coerce",
-        ).fillna(0.0)
+        )
 
-        y = y.clip(lower=0.0)
+        history = history.dropna(
+            subset=[
+                timestamp_column,
+                target_column,
+            ]
+        ).copy()
 
-        if len(y) < 3:
+        if history.empty:
             raise InsufficientHistoryError(
-                f"medicine_id={item_id} has only {len(y)} observations; "
-                "minimum 3 observations required for TSB."
+                f"No usable TSB history for medicine_id={item_id}"
             )
 
-        # ------------------------------------------------------------------
-        # Identify non-zero demand observations
-        # ------------------------------------------------------------------
+        # --------------------------------------------------------------------
+        # Normalize daily timestamps.
+        # --------------------------------------------------------------------
 
-        demand_mask = y.to_numpy(dtype=float) > 0.0
+        if isinstance(
+            history[timestamp_column].dtype,
+            pd.DatetimeTZDtype,
+        ):
+            history[timestamp_column] = (
+                history[timestamp_column]
+                .dt.tz_localize(None)
+            )
 
-        demand_positions = np.flatnonzero(demand_mask)
+        history[timestamp_column] = (
+            history[timestamp_column]
+            .dt.normalize()
+        )
+
+        # --------------------------------------------------------------------
+        # Clip negative demand and aggregate duplicate days.
+        #
+        # This makes forecast_tsb safe even when called independently from
+        # the production router.
+        # --------------------------------------------------------------------
+
+        history[target_column] = (
+            history[target_column]
+            .astype(float)
+            .clip(lower=0.0)
+        )
+
+        history = (
+            history.groupby(
+                timestamp_column,
+                as_index=False,
+            )[target_column]
+            .sum()
+            .sort_values(timestamp_column)
+            .reset_index(drop=True)
+        )
+
+        if len(history) < 3:
+            raise InsufficientHistoryError(
+                f"medicine_id={item_id} has only "
+                f"{len(history)} observations; minimum 3 "
+                "observations required for TSB."
+            )
+
+        values = history[
+            target_column
+        ].to_numpy(
+            dtype=float
+        )
+
+        if not np.isfinite(values).all():
+            raise ValueError(
+                f"TSB history contains non-finite demand values "
+                f"for medicine_id={item_id}."
+            )
+
+        # --------------------------------------------------------------------
+        # Locate first non-zero demand.
+        # --------------------------------------------------------------------
+
+        demand_positions = np.flatnonzero(
+            values > 0.0
+        )
 
         if len(demand_positions) == 0:
 
@@ -597,135 +912,90 @@ class ProductionForecastRouter:
 
         else:
 
-            # --------------------------------------------------------------
-            # Initial demand probability
-            #
-            # TSB estimates probability of demand occurrence using the
-            # interval between non-zero demands.
-            #
-            # For the first observed demand:
-            #
-            #     p = 1 / interval
-            #
-            # --------------------------------------------------------------
-
-            first_demand_position = int(
+            first_position = int(
                 demand_positions[0]
             )
 
-            first_interval = (
-                first_demand_position + 1
+            demand_estimate = float(
+                values[first_position]
             )
 
-            probability = 1.0 / max(
-                first_interval,
-                1,
+            probability = (
+                1.0
+                / float(first_position + 1)
             )
 
-            # --------------------------------------------------------------
-            # Initial demand size
-            # --------------------------------------------------------------
+            # ---------------------------------------------------------------
+            # Validated TSB sequential update.
+            # ---------------------------------------------------------------
 
-            demand_size = float(
-                y.iloc[first_demand_position]
-            )
+            for position in range(
+                first_position + 1,
+                len(values),
+            ):
 
-            previous_demand_position = first_demand_position
-
-            # --------------------------------------------------------------
-            # Sequential TSB updates
-            # --------------------------------------------------------------
-
-            for position in demand_positions[1:]:
-
-                position = int(position)
-
-                # Every time step since the previous observation:
-                # update the probability of occurrence.
-                #
-                # If a demand occurs:
-                #
-                #     p_t = p_{t-1} + alpha * (1 - p_{t-1})
-                #
-                # If no demand occurs:
-                #
-                #     p_t = (1 - alpha) * p_{t-1}
-                #
-                # The loop below explicitly applies those updates over
-                # the elapsed daily observations.
-
-                gap = (
-                    position
-                    - previous_demand_position
+                observed_demand = float(
+                    values[position]
                 )
 
-                if gap > 1:
+                occurrence = (
+                    1.0
+                    if observed_demand > 0.0
+                    else 0.0
+                )
 
-                    for _ in range(gap - 1):
-                        probability = (
-                            (1.0 - alpha)
-                            * probability
-                        )
-
-                # Demand occurrence update.
                 probability = (
                     probability
-                    + alpha * (1.0 - probability)
+                    + alpha_probability
+                    * (
+                        occurrence
+                        - probability
+                    )
                 )
 
-                # Demand-size update only occurs when demand is non-zero.
-                observed_demand = float(
-                    y.iloc[position]
-                )
+                if occurrence > 0.0:
 
-                demand_size = (
-                    demand_size
-                    + beta
-                    * (observed_demand - demand_size)
-                )
-
-                previous_demand_position = position
-
-            # --------------------------------------------------------------
-            # Account for zero-demand observations after the last demand.
-            # --------------------------------------------------------------
-
-            trailing_zeros = (
-                len(y)
-                - 1
-                - previous_demand_position
-            )
-
-            if trailing_zeros > 0:
-
-                for _ in range(trailing_zeros):
-
-                    probability = (
-                        (1.0 - alpha)
-                        * probability
+                    demand_estimate = (
+                        demand_estimate
+                        + alpha_demand
+                        * (
+                            observed_demand
+                            - demand_estimate
+                        )
                     )
 
             forecast_value = (
                 max(probability, 0.0)
-                * max(demand_size, 0.0)
+                * max(demand_estimate, 0.0)
             )
 
-        # ------------------------------------------------------------------
-        # Forecast dates
-        # ------------------------------------------------------------------
+        forecast_value = float(
+            max(
+                forecast_value,
+                0.0,
+            )
+        )
+
+        if not np.isfinite(
+            forecast_value
+        ):
+            raise ValueError(
+                f"TSB produced a non-finite forecast "
+                f"for medicine_id={item_id}."
+            )
+
+        # --------------------------------------------------------------------
+        # Generate future daily dates.
+        # --------------------------------------------------------------------
 
         last_date = pd.Timestamp(
             history[timestamp_column].max()
-        )
+        ).normalize()
 
         dates = pd.date_range(
             start=last_date + pd.Timedelta(days=1),
             periods=prediction_length,
             freq="D",
-        )
-
-        forecast_value = float(
-            max(forecast_value, 0.0)
         )
 
         return pd.DataFrame(
@@ -737,163 +1007,198 @@ class ProductionForecastRouter:
         )
 
     # ========================================================================
-    # PRODUCTION FORECAST — ONE MEDICINE
+    # CHRONOS RESULT FORMATTER
     # ========================================================================
 
-    def forecast_medicine(
-        self,
-        medicine_id: str,
-        history_df: pd.DataFrame,
-        validation_advantage_pct: Optional[float],
+    @staticmethod
+    def _format_chronos_result(
+        result,
+        decision: RoutingDecision,
     ) -> pd.DataFrame:
         """
-        Generate a production forecast for one medicine.
-
-        The input can be the actual Silver daily-demand dataframe:
-
-            MDCODE
-            INVDT
-            Demand_Qty
-
-        Routing:
-
-            Chronos-2 P50 if validation advantage >= 30%
-            TSB otherwise
+        Convert PredictorService result into production output format.
         """
 
-        medicine_id = str(medicine_id)
+        rows = []
 
-        # ------------------------------------------------------------------
-        # Normalize production input
-        # ------------------------------------------------------------------
+        for day in result.days:
 
-        prepared_history = self._prepare_history(
-            history_df
-        )
+            quantiles = day.quantiles
 
-        # ------------------------------------------------------------------
-        # Build immutable routing decision
-        # ------------------------------------------------------------------
+            values = {
+                "P10": float(quantiles.p10),
+                "P20": float(quantiles.p20),
+                "P30": float(quantiles.p30),
+                "P40": float(quantiles.p40),
+                "P50": float(quantiles.p50),
+                "P60": float(quantiles.p60),
+                "P70": float(quantiles.p70),
+                "P80": float(quantiles.p80),
+                "P90": float(quantiles.p90),
+            }
 
-        decision = self.build_decision(
-            medicine_id=medicine_id,
-            validation_advantage_pct=validation_advantage_pct,
-        )
+            # ----------------------------------------------------------------
+            # Defensive numeric validation.
+            # ----------------------------------------------------------------
 
-        logger.info(
-            "ROUTING | medicine=%s | model=%s | advantage=%s | rule=%s",
-            medicine_id,
-            decision.selected_model,
-            decision.validation_advantage_pct,
-            decision.routing_rule,
-        )
-
-        # ==================================================================
-        # CHRONOS-2 P50
-        # ==================================================================
-
-        if decision.selected_model == CHRONOS_MODEL:
-
-            result = self.predictor.forecast_medicine(
-                medicine_id,
-                prepared_history,
+            numeric_values = np.array(
+                list(values.values()),
+                dtype=float,
             )
 
-            rows = []
-
-            for day in result.days:
-
-                rows.append(
-                    {
-                        "Medicine_ID": result.medicine_id,
-
-                        "Forecast_Date": pd.Timestamp(
-                            day.forecast_date
-                        ),
-
-                        "Predicted_Demand": float(
-                            day.predicted_demand
-                        ),
-
-                        "P10": float(day.quantiles.p10),
-                        "P20": float(day.quantiles.p20),
-                        "P30": float(day.quantiles.p30),
-                        "P40": float(day.quantiles.p40),
-                        "P50": float(day.quantiles.p50),
-                        "P60": float(day.quantiles.p60),
-                        "P70": float(day.quantiles.p70),
-                        "P80": float(day.quantiles.p80),
-                        "P90": float(day.quantiles.p90),
-
-                        "Selected_Model": CHRONOS_MODEL,
-
-                        "Routing_Rule": (
-                            decision.routing_rule
-                        ),
-
-                        "Validation_Advantage_Pct": (
-                            decision.validation_advantage_pct
-                        ),
-
-                        "Routing_Reason": decision.reason,
-
-                        "Context_Length_Used": (
-                            result.context_length_used
-                        ),
-
-                        "Prediction_Length": (
-                            result.prediction_length
-                        ),
-
-                        "Model_ID": result.model_id,
-
-                        "Generated_At": result.generated_at,
-                    }
+            if not np.isfinite(
+                numeric_values
+            ).all():
+                raise ValueError(
+                    f"Chronos returned non-finite quantile values "
+                    f"for medicine_id={result.medicine_id}."
                 )
 
-            return pd.DataFrame(rows)
+            if (
+                numeric_values < 0
+            ).any():
+                raise ValueError(
+                    f"Chronos returned negative quantile values "
+                    f"for medicine_id={result.medicine_id}."
+                )
 
-        # ==================================================================
-        # TSB FALLBACK
-        # ==================================================================
+            # ----------------------------------------------------------------
+            # Quantile monotonicity.
+            #
+            # PredictorService already enforces this, but production router
+            # keeps an explicit invariant here as well.
+            # ----------------------------------------------------------------
 
-        tsb = self.forecast_tsb(
-            history_df=prepared_history,
-            medicine_id=medicine_id,
-            prediction_length=(
-                self.predictor.config.prediction_length
-            ),
-            timestamp_column=(
-                self.predictor.config.timestamp_column
-            ),
-            target_column=(
-                self.predictor.config.target_column
-            ),
+            ordered = [
+                values["P10"],
+                values["P20"],
+                values["P30"],
+                values["P40"],
+                values["P50"],
+                values["P60"],
+                values["P70"],
+                values["P80"],
+                values["P90"],
+            ]
+
+            if any(
+                ordered[i] > ordered[i + 1]
+                for i in range(
+                    len(ordered) - 1
+                )
+            ):
+                raise ValueError(
+                    f"Chronos quantiles are not monotonic for "
+                    f"medicine_id={result.medicine_id}."
+                )
+
+            rows.append(
+                {
+                    "Medicine_ID": str(
+                        result.medicine_id
+                    ),
+                    "Forecast_Date": pd.Timestamp(
+                        day.forecast_date
+                    ).normalize(),
+                    "Predicted_Demand": values["P50"],
+                    "P10": values["P10"],
+                    "P20": values["P20"],
+                    "P30": values["P30"],
+                    "P40": values["P40"],
+                    "P50": values["P50"],
+                    "P60": values["P60"],
+                    "P70": values["P70"],
+                    "P80": values["P80"],
+                    "P90": values["P90"],
+                    "Selected_Model": CHRONOS_MODEL,
+                    "Forecast_Type": "probabilistic",
+                    "Routing_Rule": decision.routing_rule,
+                    "Validation_Advantage_Pct": (
+                        decision.validation_advantage_pct
+                    ),
+                    "Routing_Reason": decision.reason,
+                    "Context_Length_Used": (
+                        result.context_length_used
+                    ),
+                    "Prediction_Length": (
+                        result.prediction_length
+                    ),
+                    "Model_ID": result.model_id,
+                    "Generated_At": result.generated_at,
+                }
+            )
+
+        if not rows:
+            raise InsufficientHistoryError(
+                "Chronos returned no forecast days."
+            )
+
+        output = pd.DataFrame(
+            rows,
+            columns=OUTPUT_COLUMNS,
         )
 
-        # TSB is a point forecast. There is no calibrated probabilistic
-        # distribution available from this implementation.
-        #
-        # We therefore expose the point forecast consistently across the
-        # output schema rather than pretending these are independently
-        # calibrated quantiles.
-
-        for quantile in (
-            "P10",
-            "P20",
-            "P30",
-            "P40",
-            "P50",
-            "P60",
-            "P70",
-            "P80",
-            "P90",
+        # Chronos production point forecast must be P50.
+        if not np.allclose(
+            output["Predicted_Demand"].to_numpy(dtype=float),
+            output["P50"].to_numpy(dtype=float),
+            rtol=1e-9,
+            atol=1e-9,
         ):
+            raise ValueError(
+                "Chronos Predicted_Demand is not equal to P50."
+            )
+
+        return output
+
+    # ========================================================================
+    # TSB RESULT FORMATTER
+    # ========================================================================
+
+    def _format_tsb_result(
+        self,
+        tsb: pd.DataFrame,
+        decision: RoutingDecision,
+        medicine_history: pd.DataFrame,
+    ) -> pd.DataFrame:
+        """
+        Convert TSB point forecast into the common production schema.
+
+        TSB is not probabilistic.
+
+        P10...P90 are therefore populated with the same point forecast only
+        for schema compatibility. Forecast_Type explicitly remains "point".
+        """
+
+        tsb = tsb.copy()
+
+        predicted = pd.to_numeric(
+            tsb["Predicted_Demand"],
+            errors="coerce",
+        )
+
+        if predicted.isna().any():
+            raise ValueError(
+                "TSB produced non-numeric demand values."
+            )
+
+        if (
+            predicted < 0
+        ).any():
+            raise ValueError(
+                "TSB produced negative demand values."
+            )
+
+        tsb["Predicted_Demand"] = predicted.astype(float)
+
+        for quantile in TSB_QUANTILES:
             tsb[quantile] = (
                 tsb["Predicted_Demand"]
             )
 
         tsb["Selected_Model"] = TSB_MODEL
+
+        tsb["Forecast_Type"] = "point"
 
         tsb["Routing_Rule"] = (
             decision.routing_rule
@@ -906,11 +1211,6 @@ class ProductionForecastRouter:
         tsb["Routing_Reason"] = (
             decision.reason
         )
-
-        medicine_history = prepared_history[
-            prepared_history[INTERNAL_ID_COLUMN].astype(str)
-            == medicine_id
-        ]
 
         tsb["Context_Length_Used"] = min(
             len(medicine_history),
@@ -927,36 +1227,188 @@ class ProductionForecastRouter:
             datetime.now(timezone.utc)
         )
 
-        return tsb
+        return tsb[
+            OUTPUT_COLUMNS
+        ]
 
     # ========================================================================
-    # BATCH FORECASTING
+    # CHRONOS FORECAST
     # ========================================================================
 
-    def forecast_batch(
+    def _forecast_chronos(
         self,
-        history_df: pd.DataFrame,
-        routing_table: pd.DataFrame,
-    ) -> tuple[pd.DataFrame, list[str]]:
+        medicine_id: str,
+        medicine_history: pd.DataFrame,
+        decision: RoutingDecision,
+    ) -> pd.DataFrame:
         """
-        Generate forecasts for all medicines represented in routing_table.
+        Generate Chronos-2 P50 forecast for one medicine.
+        """
 
-        routing_table must contain:
+        result = self.predictor.forecast_medicine(
+            medicine_id=medicine_id,
+            history_df=medicine_history,
+        )
 
-            Medicine_ID
-            Validation_Advantage_Pct
+        return self._format_chronos_result(
+            result=result,
+            decision=decision,
+        )
 
-        history_df must contain the actual Silver schema:
+    # ========================================================================
+    # TSB FORECAST
+    # ========================================================================
+
+    def _forecast_tsb(
+        self,
+        medicine_id: str,
+        medicine_history: pd.DataFrame,
+        decision: RoutingDecision,
+    ) -> pd.DataFrame:
+        """
+        Generate validated TSB forecast.
+        """
+
+        cfg = self.predictor.config
+
+        tsb = self.forecast_tsb(
+            history_df=medicine_history,
+            medicine_id=medicine_id,
+            prediction_length=cfg.prediction_length,
+            timestamp_column=cfg.timestamp_column,
+            target_column=cfg.target_column,
+            alpha_demand=TSB_ALPHA_DEMAND,
+            alpha_probability=TSB_ALPHA_PROBABILITY,
+        )
+
+        return self._format_tsb_result(
+            tsb=tsb,
+            decision=decision,
+            medicine_history=medicine_history,
+        )
+
+    # ========================================================================
+    # ONE-MEDICINE PRODUCTION FORECAST
+    # ========================================================================
+
+    def forecast_medicine(
+        self,
+        medicine_id: str,
+        history_df: pd.DataFrame,
+        validation_advantage_pct: Optional[float],
+    ) -> pd.DataFrame:
+        """
+        Generate a production forecast for one medicine.
+
+        Source schema:
 
             MDCODE
             INVDT
             Demand_Qty
 
-        Returns:
+        Routing:
 
-            forecasts
-            failed_medicines
+            advantage >= 30%
+                -> Chronos-2 P50
+
+            otherwise
+                -> TSB
         """
+
+        medicine_id = str(
+            medicine_id
+        ).strip()
+
+        if not medicine_id:
+            raise ValueError(
+                "medicine_id cannot be empty."
+            )
+
+        prepared_history = (
+            self._prepare_history(
+                history_df
+            )
+        )
+
+        medicine_history = (
+            prepared_history[
+                prepared_history[
+                    INTERNAL_ID_COLUMN
+                ]
+                .astype(str)
+                .str.strip()
+                == medicine_id
+            ]
+            .copy()
+        )
+
+        if medicine_history.empty:
+            raise InsufficientHistoryError(
+                f"No history for medicine_id={medicine_id}"
+            )
+
+        decision = self.build_decision(
+            medicine_id=medicine_id,
+            validation_advantage_pct=(
+                validation_advantage_pct
+            ),
+        )
+
+        logger.info(
+            "ROUTING | medicine=%s | model=%s | advantage=%s | rule=%s",
+            medicine_id,
+            decision.selected_model,
+            decision.validation_advantage_pct,
+            decision.routing_rule,
+        )
+
+        if decision.selected_model == CHRONOS_MODEL:
+
+            forecast = self._forecast_chronos(
+                medicine_id=medicine_id,
+                medicine_history=medicine_history,
+                decision=decision,
+            )
+
+        else:
+
+            forecast = self._forecast_tsb(
+                medicine_id=medicine_id,
+                medicine_history=medicine_history,
+                decision=decision,
+            )
+
+        self._validate_forecast_output(
+            forecast,
+            medicine_id,
+        )
+
+        return forecast
+
+    # ========================================================================
+    # ROUTING TABLE VALIDATION
+    # ========================================================================
+
+    @staticmethod
+    def _validate_routing_table(
+        routing_table: pd.DataFrame,
+    ) -> None:
+        """
+        Validate production routing-table structure.
+
+        Required:
+
+            Medicine_ID
+            Validation_Advantage_Pct
+        """
+
+        if not isinstance(
+            routing_table,
+            pd.DataFrame,
+        ):
+            raise TypeError(
+                "routing_table must be a pandas DataFrame."
+            )
 
         required = {
             "Medicine_ID",
@@ -974,14 +1426,130 @@ class ProductionForecastRouter:
                 f"{sorted(missing)}"
             )
 
-        # Validate the Silver dataset before beginning the batch.
+        if routing_table.empty:
+            raise ValueError(
+                "Routing table is empty."
+            )
+
+        normalized_ids = (
+            routing_table["Medicine_ID"]
+            .astype(str)
+            .str.strip()
+        )
+
+        if normalized_ids.eq("").any():
+            raise ValueError(
+                "Routing table contains empty Medicine_ID values."
+            )
+
+        duplicate_mask = normalized_ids.duplicated(
+            keep=False
+        )
+
+        if duplicate_mask.any():
+
+            duplicates = (
+                normalized_ids[
+                    duplicate_mask
+                ]
+                .unique()
+                .tolist()
+            )
+
+            raise ValueError(
+                "Routing table contains duplicate Medicine_ID values: "
+                f"{duplicates}"
+            )
+
+        raw_advantage = routing_table[
+            "Validation_Advantage_Pct"
+        ]
+
+        advantage = pd.to_numeric(
+            raw_advantage,
+            errors="coerce",
+        )
+
+        invalid_non_numeric = (
+            raw_advantage.notna()
+            & advantage.isna()
+        )
+
+        if invalid_non_numeric.any():
+
+            invalid_values = (
+                raw_advantage.loc[
+                    invalid_non_numeric
+                ]
+                .astype(str)
+                .unique()
+                .tolist()
+            )
+
+            raise ValueError(
+                "Routing table contains non-numeric "
+                "Validation_Advantage_Pct values: "
+                f"{invalid_values}"
+            )
+
+        invalid_finite = (
+            advantage.notna()
+            & ~np.isfinite(
+                advantage
+            )
+        )
+
+        if invalid_finite.any():
+            raise ValueError(
+                "Routing table contains non-finite "
+                "Validation_Advantage_Pct values."
+            )
+
+    # ========================================================================
+    # BATCH FORECASTING
+    # ========================================================================
+
+    def forecast_batch(
+        self,
+        history_df: pd.DataFrame,
+        routing_table: pd.DataFrame,
+    ) -> tuple[pd.DataFrame, list[str]]:
+        """
+        Generate production forecasts for all medicines in routing_table.
+
+        History:
+
+            MDCODE
+            INVDT
+            Demand_Qty
+
+        Routing table:
+
+            Medicine_ID
+            Validation_Advantage_Pct
+
+        Returns:
+
+            forecasts
+            failed_medicines
+        """
+
+        self._validate_routing_table(
+            routing_table
+        )
+
         self._validate_source_history(
             history_df
         )
 
-        # Prepare once for the complete batch.
-        prepared_history = self._prepare_history(
-            history_df
+        # --------------------------------------------------------------------
+        # Prepare source history exactly once.
+        # --------------------------------------------------------------------
+
+        prepared_history = (
+            self._prepare_history(
+                history_df
+            )
         )
 
         routing_table = routing_table.copy()
@@ -992,18 +1560,32 @@ class ProductionForecastRouter:
             .str.strip()
         )
 
-        forecasts = []
-        failed = []
+        routing_table[
+            "Validation_Advantage_Pct"
+        ] = pd.to_numeric(
+            routing_table[
+                "Validation_Advantage_Pct"
+            ],
+            errors="coerce",
+        )
+
+        forecasts: list[pd.DataFrame] = []
+
+        failed: list[str] = []
+
+        # --------------------------------------------------------------------
+        # Process every routed medicine independently.
+        # --------------------------------------------------------------------
 
         for _, route in routing_table.iterrows():
 
             medicine_id = str(
                 route["Medicine_ID"]
-            )
+            ).strip()
 
-            advantage = (
-                route["Validation_Advantage_Pct"]
-            )
+            advantage = route[
+                "Validation_Advantage_Pct"
+            ]
 
             try:
 
@@ -1014,21 +1596,24 @@ class ProductionForecastRouter:
 
                 logger.info(
                     "BATCH ROUTING | medicine=%s | model=%s | "
-                    "advantage=%s",
+                    "advantage=%s | rule=%s",
                     medicine_id,
                     decision.selected_model,
                     decision.validation_advantage_pct,
+                    decision.routing_rule,
                 )
 
-                # Use the already normalized history rather than rebuilding
-                # the complete daily calendar for every medicine.
-
-                medicine_history = prepared_history[
+                medicine_history = (
                     prepared_history[
-                        INTERNAL_ID_COLUMN
-                    ].astype(str)
-                    == medicine_id
-                ].copy()
+                        prepared_history[
+                            INTERNAL_ID_COLUMN
+                        ]
+                        .astype(str)
+                        .str.strip()
+                        == medicine_id
+                    ]
+                    .copy()
+                )
 
                 if medicine_history.empty:
                     raise InsufficientHistoryError(
@@ -1037,162 +1622,28 @@ class ProductionForecastRouter:
 
                 if decision.selected_model == CHRONOS_MODEL:
 
-                    result = self.predictor.forecast_medicine(
-                        medicine_id,
-                        prepared_history,
-                    )
-
-                    rows = []
-
-                    for day in result.days:
-
-                        rows.append(
-                            {
-                                "Medicine_ID": (
-                                    result.medicine_id
-                                ),
-
-                                "Forecast_Date": (
-                                    pd.Timestamp(
-                                        day.forecast_date
-                                    )
-                                ),
-
-                                "Predicted_Demand": float(
-                                    day.predicted_demand
-                                ),
-
-                                "P10": float(
-                                    day.quantiles.p10
-                                ),
-                                "P20": float(
-                                    day.quantiles.p20
-                                ),
-                                "P30": float(
-                                    day.quantiles.p30
-                                ),
-                                "P40": float(
-                                    day.quantiles.p40
-                                ),
-                                "P50": float(
-                                    day.quantiles.p50
-                                ),
-                                "P60": float(
-                                    day.quantiles.p60
-                                ),
-                                "P70": float(
-                                    day.quantiles.p70
-                                ),
-                                "P80": float(
-                                    day.quantiles.p80
-                                ),
-                                "P90": float(
-                                    day.quantiles.p90
-                                ),
-
-                                "Selected_Model": (
-                                    CHRONOS_MODEL
-                                ),
-
-                                "Routing_Rule": (
-                                    decision.routing_rule
-                                ),
-
-                                "Validation_Advantage_Pct": (
-                                    decision.validation_advantage_pct
-                                ),
-
-                                "Routing_Reason": (
-                                    decision.reason
-                                ),
-
-                                "Context_Length_Used": (
-                                    result.context_length_used
-                                ),
-
-                                "Prediction_Length": (
-                                    result.prediction_length
-                                ),
-
-                                "Model_ID": (
-                                    result.model_id
-                                ),
-
-                                "Generated_At": (
-                                    result.generated_at
-                                ),
-                            }
-                        )
-
-                    forecasts.append(
-                        pd.DataFrame(rows)
+                    forecast = self._forecast_chronos(
+                        medicine_id=medicine_id,
+                        medicine_history=medicine_history,
+                        decision=decision,
                     )
 
                 else:
 
-                    tsb = self.forecast_tsb(
-                        history_df=prepared_history,
+                    forecast = self._forecast_tsb(
                         medicine_id=medicine_id,
-                        prediction_length=(
-                            self.predictor.config.prediction_length
-                        ),
-                        timestamp_column=(
-                            self.predictor.config.timestamp_column
-                        ),
-                        target_column=(
-                            self.predictor.config.target_column
-                        ),
+                        medicine_history=medicine_history,
+                        decision=decision,
                     )
 
-                    for quantile in (
-                        "P10",
-                        "P20",
-                        "P30",
-                        "P40",
-                        "P50",
-                        "P60",
-                        "P70",
-                        "P80",
-                        "P90",
-                    ):
-                        tsb[quantile] = (
-                            tsb["Predicted_Demand"]
-                        )
+                self._validate_forecast_output(
+                    forecast,
+                    medicine_id,
+                )
 
-                    tsb["Selected_Model"] = (
-                        TSB_MODEL
-                    )
-
-                    tsb["Routing_Rule"] = (
-                        decision.routing_rule
-                    )
-
-                    tsb["Validation_Advantage_Pct"] = (
-                        decision.validation_advantage_pct
-                    )
-
-                    tsb["Routing_Reason"] = (
-                        decision.reason
-                    )
-
-                    tsb["Context_Length_Used"] = min(
-                        len(medicine_history),
-                        self.predictor.config.context_length,
-                    )
-
-                    tsb["Prediction_Length"] = (
-                        self.predictor.config.prediction_length
-                    )
-
-                    tsb["Model_ID"] = (
-                        TSB_MODEL
-                    )
-
-                    tsb["Generated_At"] = (
-                        datetime.now(timezone.utc)
-                    )
-
-                    forecasts.append(tsb)
+                forecasts.append(
+                    forecast
+                )
 
             except InsufficientHistoryError as exc:
 
@@ -1206,10 +1657,26 @@ class ProductionForecastRouter:
                     medicine_id
                 )
 
+            except (
+                ValueError,
+                TypeError,
+            ) as exc:
+
+                logger.error(
+                    "Invalid production forecast for medicine=%s: %s",
+                    medicine_id,
+                    exc,
+                )
+
+                failed.append(
+                    medicine_id
+                )
+
             except Exception:
 
                 logger.exception(
-                    "Production forecast failed for medicine=%s",
+                    "Unexpected production forecast failure "
+                    "for medicine=%s",
                     medicine_id,
                 )
 
@@ -1217,9 +1684,9 @@ class ProductionForecastRouter:
                     medicine_id
                 )
 
-        # ------------------------------------------------------------------
-        # Final output
-        # ------------------------------------------------------------------
+        # --------------------------------------------------------------------
+        # Assemble final output.
+        # --------------------------------------------------------------------
 
         if forecasts:
 
@@ -1240,10 +1707,256 @@ class ProductionForecastRouter:
         else:
 
             output = pd.DataFrame(
-                columns=[
-                    "Medicine_ID",
-                    "Forecast_Date",
+                columns=OUTPUT_COLUMNS
+            )
+
+        return output, failed
+
+    # ========================================================================
+    # FORECAST OUTPUT VALIDATION
+    # ========================================================================
+
+    @staticmethod
+    def _validate_forecast_output(
+        forecast: pd.DataFrame,
+        medicine_id: str,
+    ) -> None:
+        """
+        Validate production forecast integrity.
+        """
+
+        if not isinstance(
+            forecast,
+            pd.DataFrame,
+        ):
+            raise TypeError(
+                "Forecast result must be a pandas DataFrame."
+            )
+
+        if forecast.empty:
+            raise ValueError(
+                f"Forecast result is empty for medicine_id={medicine_id}."
+            )
+
+        missing = (
+            set(OUTPUT_COLUMNS)
+            - set(forecast.columns)
+        )
+
+        if missing:
+            raise ValueError(
+                f"Forecast output for medicine_id={medicine_id} "
+                f"is missing columns: {sorted(missing)}"
+            )
+
+        # --------------------------------------------------------------------
+        # Medicine identity.
+        # --------------------------------------------------------------------
+
+        output_ids = (
+            forecast["Medicine_ID"]
+            .astype(str)
+            .str.strip()
+            .unique()
+        )
+
+        if len(output_ids) != 1:
+            raise ValueError(
+                f"Forecast for medicine_id={medicine_id} "
+                "contains multiple medicine IDs."
+            )
+
+        if output_ids[0] != str(
+            medicine_id
+        ).strip():
+            raise ValueError(
+                f"Forecast medicine mismatch. "
+                f"Expected={medicine_id}, "
+                f"Found={output_ids.tolist()}"
+            )
+
+        # --------------------------------------------------------------------
+        # Dates.
+        # --------------------------------------------------------------------
+
+        dates = pd.to_datetime(
+            forecast["Forecast_Date"],
+            errors="coerce",
+        )
+
+        if dates.isna().any():
+            raise ValueError(
+                f"Forecast contains invalid dates for "
+                f"medicine_id={medicine_id}."
+            )
+
+        if dates.duplicated().any():
+            raise ValueError(
+                f"Forecast contains duplicate dates for "
+                f"medicine_id={medicine_id}."
+            )
+
+        if not dates.is_monotonic_increasing:
+            raise ValueError(
+                f"Forecast dates are not sorted for "
+                f"medicine_id={medicine_id}."
+            )
+
+        # --------------------------------------------------------------------
+        # Demand / quantile values.
+        # --------------------------------------------------------------------
+
+        numeric_columns = [
+            "Predicted_Demand",
+            "P10",
+            "P20",
+            "P30",
+            "P40",
+            "P50",
+            "P60",
+            "P70",
+            "P80",
+            "P90",
+        ]
+
+        numeric = forecast[
+            numeric_columns
+        ].apply(
+            pd.to_numeric,
+            errors="coerce",
+        )
+
+        if numeric.isna().any().any():
+            raise ValueError(
+                f"Forecast contains NaN/non-numeric demand values "
+                f"for medicine_id={medicine_id}."
+            )
+
+        values = numeric.to_numpy(
+            dtype=float
+        )
+
+        if not np.isfinite(values).all():
+            raise ValueError(
+                f"Forecast contains non-finite demand values "
+                f"for medicine_id={medicine_id}."
+            )
+
+        if (
+            values < 0
+        ).any():
+            raise ValueError(
+                f"Forecast contains negative demand values "
+                f"for medicine_id={medicine_id}."
+            )
+
+        # --------------------------------------------------------------------
+        # Validate model.
+        # --------------------------------------------------------------------
+
+        allowed_models = {
+            CHRONOS_MODEL,
+            TSB_MODEL,
+        }
+
+        invalid_models = (
+            set(
+                forecast["Selected_Model"]
+            )
+            - allowed_models
+        )
+
+        if invalid_models:
+            raise ValueError(
+                f"Invalid Selected_Model values for "
+                f"medicine_id={medicine_id}: "
+                f"{sorted(invalid_models)}"
+            )
+
+        # --------------------------------------------------------------------
+        # Validate Forecast_Type.
+        # --------------------------------------------------------------------
+
+        expected_forecast_types = {
+            CHRONOS_MODEL: "probabilistic",
+            TSB_MODEL: "point",
+        }
+
+        for model, expected_type in (
+            expected_forecast_types.items()
+        ):
+
+            mask = (
+                forecast["Selected_Model"]
+                == model
+            )
+
+            if mask.any():
+
+                actual_types = set(
+                    forecast.loc[
+                        mask,
+                        "Forecast_Type",
+                    ]
+                )
+
+                if actual_types != {
+                    expected_type
+                }:
+                    raise ValueError(
+                        f"Invalid Forecast_Type for "
+                        f"model={model}, "
+                        f"medicine_id={medicine_id}: "
+                        f"{actual_types}"
+                    )
+
+        # --------------------------------------------------------------------
+        # Chronos Predicted_Demand must equal P50.
+        # --------------------------------------------------------------------
+
+        chronos_mask = (
+            forecast["Selected_Model"]
+            == CHRONOS_MODEL
+        )
+
+        if chronos_mask.any():
+
+            predicted = (
+                forecast.loc[
+                    chronos_mask,
                     "Predicted_Demand",
+                ]
+                .astype(float)
+                .to_numpy()
+            )
+
+            p50 = (
+                forecast.loc[
+                    chronos_mask,
+                    "P50",
+                ]
+                .astype(float)
+                .to_numpy()
+            )
+
+            if not np.allclose(
+                predicted,
+                p50,
+                rtol=1e-9,
+                atol=1e-9,
+            ):
+                raise ValueError(
+                    f"Chronos Predicted_Demand does not equal P50 "
+                    f"for medicine_id={medicine_id}."
+                )
+
+            # ---------------------------------------------------------------
+            # Quantiles must be monotonically increasing.
+            # ---------------------------------------------------------------
+
+            quantile_matrix = forecast.loc[
+                chronos_mask,
+                [
                     "P10",
                     "P20",
                     "P30",
@@ -1253,38 +1966,309 @@ class ProductionForecastRouter:
                     "P70",
                     "P80",
                     "P90",
-                    "Selected_Model",
-                    "Routing_Rule",
-                    "Validation_Advantage_Pct",
-                    "Routing_Reason",
-                    "Context_Length_Used",
-                    "Prediction_Length",
-                    "Model_ID",
-                    "Generated_At",
-                ]
+                ],
+            ].to_numpy(
+                dtype=float
             )
 
-        return output, failed
+            if (
+                np.diff(
+                    quantile_matrix,
+                    axis=1,
+                )
+                < -1e-9
+            ).any():
 
+                raise ValueError(
+                    f"Chronos quantiles are not monotonic "
+                    f"for medicine_id={medicine_id}."
+                )
 
-# ============================================================================
-# ROUTING TABLE BUILDER
-# ============================================================================
+        # --------------------------------------------------------------------
+        # TSB quantiles must equal the point forecast because they are only
+        # schema-compatible placeholders, not calibrated probabilistic
+        # estimates.
+        # --------------------------------------------------------------------
+
+        tsb_mask = (
+            forecast["Selected_Model"]
+            == TSB_MODEL
+        )
+
+        if tsb_mask.any():
+
+            predicted = forecast.loc[
+                tsb_mask,
+                "Predicted_Demand",
+            ].to_numpy(
+                dtype=float
+            )
+
+            for quantile in TSB_QUANTILES:
+
+                quantile_values = forecast.loc[
+                    tsb_mask,
+                    quantile,
+                ].to_numpy(
+                    dtype=float
+                )
+
+                if not np.allclose(
+                    predicted,
+                    quantile_values,
+                    rtol=1e-9,
+                    atol=1e-9,
+                ):
+                    raise ValueError(
+                        f"TSB {quantile} does not equal "
+                        f"Predicted_Demand for "
+                        f"medicine_id={medicine_id}."
+                    )
+
+        # --------------------------------------------------------------------
+        # Prediction length.
+        # --------------------------------------------------------------------
+
+        prediction_lengths = pd.to_numeric(
+            forecast[
+                "Prediction_Length"
+            ],
+            errors="coerce",
+        )
+
+        if prediction_lengths.isna().any():
+            raise ValueError(
+                f"Prediction_Length contains invalid values "
+                f"for medicine_id={medicine_id}."
+            )
+
+        unique_lengths = (
+            prediction_lengths
+            .astype(int)
+            .unique()
+        )
+
+        if len(unique_lengths) != 1:
+            raise ValueError(
+                f"Inconsistent Prediction_Length for "
+                f"medicine_id={medicine_id}."
+            )
+
+        expected_length = int(
+            unique_lengths[0]
+        )
+
+        if expected_length <= 0:
+            raise ValueError(
+                f"Prediction_Length must be positive "
+                f"for medicine_id={medicine_id}."
+            )
+
+        if len(forecast) != expected_length:
+            raise ValueError(
+                f"Forecast horizon mismatch for "
+                f"medicine_id={medicine_id}. "
+                f"Expected={expected_length}, "
+                f"actual={len(forecast)}"
+            )
+
+    # ========================================================================
+    # ROUTING POLICY SELF-CHECK
+    # ========================================================================
+
+    @staticmethod
+    def _run_policy_self_check() -> None:
+        """
+        Validate the frozen routing policy.
+        """
+
+        test_cases = [
+            (69.069, CHRONOS_MODEL),
+            (30.0, CHRONOS_MODEL),
+            (29.999, TSB_MODEL),
+            (0.0, TSB_MODEL),
+            (-20.0, TSB_MODEL),
+            (np.nan, TSB_MODEL),
+            (None, TSB_MODEL),
+            (np.inf, TSB_MODEL),
+            (-np.inf, TSB_MODEL),
+            ("invalid", TSB_MODEL),
+        ]
+
+        for advantage, expected in test_cases:
+
+            actual = (
+                ProductionForecastRouter.select_model(
+                    advantage
+                )
+            )
+
+            if actual != expected:
+                raise RuntimeError(
+                    "Production routing policy self-check failed: "
+                    f"advantage={advantage}, "
+                    f"expected={expected}, "
+                    f"actual={actual}"
+                )
+
+    # ========================================================================
+    # TSB SELF-CHECK
+    # ========================================================================
+
+    @staticmethod
+    def _run_tsb_self_check() -> None:
+        """
+        Validate basic invariants of the validated TSB implementation.
+        """
+
+        # --------------------------------------------------------------------
+        # All-zero history.
+        # --------------------------------------------------------------------
+
+        history_zero = pd.DataFrame(
+            {
+                INTERNAL_ID_COLUMN: [
+                    "TEST_ZERO"
+                ] * 5,
+                INTERNAL_TIMESTAMP_COLUMN: pd.date_range(
+                    "2026-01-01",
+                    periods=5,
+                    freq="D",
+                ),
+                INTERNAL_TARGET_COLUMN: [
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                ],
+            }
+        )
+
+        zero_forecast = (
+            ProductionForecastRouter.forecast_tsb(
+                history_zero,
+                "TEST_ZERO",
+                prediction_length=3,
+            )
+        )
+
+        zero_values = (
+            zero_forecast[
+                "Predicted_Demand"
+            ]
+            .to_numpy(
+                dtype=float
+            )
+        )
+
+        if not np.allclose(
+            zero_values,
+            0.0,
+        ):
+            raise RuntimeError(
+                "TSB self-check failed: "
+                "all-zero history did not produce zero forecast."
+            )
+
+        # --------------------------------------------------------------------
+        # Positive intermittent history.
+        # --------------------------------------------------------------------
+
+        history_positive = pd.DataFrame(
+            {
+                INTERNAL_ID_COLUMN: [
+                    "TEST_POS"
+                ] * 6,
+                INTERNAL_TIMESTAMP_COLUMN: pd.date_range(
+                    "2026-01-01",
+                    periods=6,
+                    freq="D",
+                ),
+                INTERNAL_TARGET_COLUMN: [
+                    0.0,
+                    10.0,
+                    0.0,
+                    0.0,
+                    20.0,
+                    0.0,
+                ],
+            }
+        )
+
+        positive_forecast = (
+            ProductionForecastRouter.forecast_tsb(
+                history_positive,
+                "TEST_POS",
+                prediction_length=3,
+            )
+        )
+
+        values = (
+            positive_forecast[
+                "Predicted_Demand"
+            ]
+            .to_numpy(
+                dtype=float
+            )
+        )
+
+        if not np.isfinite(
+            values
+        ).all():
+            raise RuntimeError(
+                "TSB self-check failed: "
+                "non-finite forecast produced."
+            )
+
+        if (
+            values < 0
+        ).any():
+            raise RuntimeError(
+                "TSB self-check failed: "
+                "negative forecast produced."
+            )
+
+        if not np.allclose(
+            values,
+            values[0],
+        ):
+            raise RuntimeError(
+                "TSB self-check failed: "
+                "forecast is not constant across horizon."
+            )
+
+    # ========================================================================
+    # ROUTING TABLE BUILDER
+    # ========================================================================
 
 
 def build_routing_table(
     robustness_df: pd.DataFrame,
 ) -> pd.DataFrame:
     """
-    Convert the validated robustness dataset into the exact routing table
-    required by ProductionForecastRouter.
+    Convert validation/robustness results into the production routing table.
 
-    Expected input columns:
+    Expected columns:
 
         Medicine_ID
         Validation_Chronos_AE
         Validation_TSB_AE
+
+    Important:
+
+    The input dataframe must contain validation-derived metrics only.
+
+    Do not populate these columns using holdout/test results.
     """
+
+    if not isinstance(
+        robustness_df,
+        pd.DataFrame,
+    ):
+        raise TypeError(
+            "robustness_df must be a pandas DataFrame."
+        )
 
     required = {
         "Medicine_ID",
@@ -1303,6 +2287,11 @@ def build_routing_table(
             f"{sorted(missing)}"
         )
 
+    if robustness_df.empty:
+        raise ValueError(
+            "Robustness dataframe is empty."
+        )
+
     routing = robustness_df[
         [
             "Medicine_ID",
@@ -1311,104 +2300,172 @@ def build_routing_table(
         ]
     ].copy()
 
+    # ------------------------------------------------------------------------
+    # Normalize IDs.
+    # ------------------------------------------------------------------------
+
     routing["Medicine_ID"] = (
         routing["Medicine_ID"]
         .astype(str)
         .str.strip()
     )
 
-    routing["Validation_Chronos_AE"] = pd.to_numeric(
-        routing["Validation_Chronos_AE"],
-        errors="coerce",
-    )
-
-    routing["Validation_TSB_AE"] = pd.to_numeric(
-        routing["Validation_TSB_AE"],
-        errors="coerce",
-    )
-
-    routing["Validation_Advantage_Pct"] = (
-        (
-            routing["Validation_TSB_AE"]
-            - routing["Validation_Chronos_AE"]
+    if routing[
+        "Medicine_ID"
+    ].eq("").any():
+        raise ValueError(
+            "Robustness dataframe contains empty Medicine_ID values."
         )
-        / routing["Validation_TSB_AE"].replace(
+
+    # ------------------------------------------------------------------------
+    # Duplicate validation.
+    # ------------------------------------------------------------------------
+
+    duplicate_mask = (
+        routing["Medicine_ID"]
+        .duplicated(
+            keep=False
+        )
+    )
+
+    if duplicate_mask.any():
+
+        duplicates = (
+            routing.loc[
+                duplicate_mask,
+                "Medicine_ID",
+            ]
+            .unique()
+            .tolist()
+        )
+
+        raise ValueError(
+            "Robustness dataframe contains duplicate Medicine_ID values: "
+            f"{duplicates}"
+        )
+
+    # ------------------------------------------------------------------------
+    # Numeric validation metrics.
+    # ------------------------------------------------------------------------
+
+    routing[
+        "Validation_Chronos_AE"
+    ] = pd.to_numeric(
+        routing[
+            "Validation_Chronos_AE"
+        ],
+        errors="coerce",
+    )
+
+    routing[
+        "Validation_TSB_AE"
+    ] = pd.to_numeric(
+        routing[
+            "Validation_TSB_AE"
+        ],
+        errors="coerce",
+    )
+
+    # ------------------------------------------------------------------------
+    # Validate AE values.
+    # ------------------------------------------------------------------------
+
+    for column in (
+        "Validation_Chronos_AE",
+        "Validation_TSB_AE",
+    ):
+
+        values = routing[column]
+
+        invalid = (
+            values.notna()
+            & (
+                (values < 0)
+                | ~np.isfinite(values)
+            )
+        )
+
+        if invalid.any():
+            raise ValueError(
+                f"{column} contains negative or non-finite values."
+            )
+
+    # ------------------------------------------------------------------------
+    # Calculate validation advantage.
+    #
+    # TSB AE == 0 is treated as undefined rather than allowing division
+    # by zero.
+    # ------------------------------------------------------------------------
+
+    routing[
+        "Validation_Advantage_Pct"
+    ] = (
+        (
+            routing[
+                "Validation_TSB_AE"
+            ]
+            - routing[
+                "Validation_Chronos_AE"
+            ]
+        )
+        / routing[
+            "Validation_TSB_AE"
+        ].replace(
             0,
             np.nan,
         )
         * 100.0
     )
 
-    routing["Selected_Model"] = (
-        routing["Validation_Advantage_Pct"]
+    # ------------------------------------------------------------------------
+    # Apply frozen policy.
+    # ------------------------------------------------------------------------
+
+    routing[
+        "Selected_Model"
+    ] = (
+        routing[
+            "Validation_Advantage_Pct"
+        ]
         .apply(
             ProductionForecastRouter.select_model
         )
     )
 
-    routing["Routing_Rule"] = (
-        ROUTING_RULE_NAME
-    )
+    routing[
+        "Routing_Rule"
+    ] = ROUTING_RULE_NAME
 
-    routing["Threshold"] = (
-        VALIDATION_ADVANTAGE_THRESHOLD
-    )
+    routing[
+        "Threshold"
+    ] = VALIDATION_ADVANTAGE_THRESHOLD
 
     return routing
 
 
 # ============================================================================
-# PRODUCTION SELF-CHECKS
+# MODULE-LEVEL SELF-CHECKS
 # ============================================================================
 
 
 def _run_policy_self_check() -> None:
     """
-    Validate the frozen routing policy.
+    Backward-compatible module-level policy self-check.
     """
 
-    test_cases = [
-        (69.069, CHRONOS_MODEL),
-        (30.0, CHRONOS_MODEL),
-        (29.999, TSB_MODEL),
-        (0.0, TSB_MODEL),
-        (-20.0, TSB_MODEL),
-        (np.nan, TSB_MODEL),
-        (None, TSB_MODEL),
-        (np.inf, TSB_MODEL),
-        (-np.inf, TSB_MODEL),
-    ]
+    ProductionForecastRouter._run_policy_self_check()
 
-    passed = True
 
-    for advantage, expected in test_cases:
+def _run_tsb_self_check() -> None:
+    """
+    Module-level TSB self-check.
+    """
 
-        actual = (
-            ProductionForecastRouter.select_model(
-                advantage
-            )
-        )
-
-        if actual != expected:
-
-            passed = False
-
-            logger.error(
-                "ROUTING SELF-CHECK FAILED | advantage=%s | "
-                "expected=%s | actual=%s",
-                advantage,
-                expected,
-                actual,
-            )
-
-    if not passed:
-        raise RuntimeError(
-            "Production routing policy self-check failed."
-        )
+    ProductionForecastRouter._run_tsb_self_check()
 
 
 # ============================================================================
-# CLI / VALIDATION
+# CLI
 # ============================================================================
 
 
@@ -1420,27 +2477,15 @@ def main() -> None:
 
     print()
     print("Production data schema:")
-    print(
-        f"  ID        : {SOURCE_ID_COLUMN}"
-    )
-    print(
-        f"  Date      : {SOURCE_TIMESTAMP_COLUMN}"
-    )
-    print(
-        f"  Demand    : {SOURCE_TARGET_COLUMN}"
-    )
+    print(f"  ID        : {SOURCE_ID_COLUMN}")
+    print(f"  Date      : {SOURCE_TIMESTAMP_COLUMN}")
+    print(f"  Demand    : {SOURCE_TARGET_COLUMN}")
 
     print()
-    print("Internal Chronos schema:")
-    print(
-        f"  ID        : {INTERNAL_ID_COLUMN}"
-    )
-    print(
-        f"  Timestamp : {INTERNAL_TIMESTAMP_COLUMN}"
-    )
-    print(
-        f"  Target    : {INTERNAL_TARGET_COLUMN}"
-    )
+    print("Internal forecasting schema:")
+    print(f"  ID        : {INTERNAL_ID_COLUMN}")
+    print(f"  Timestamp : {INTERNAL_TIMESTAMP_COLUMN}")
+    print(f"  Target    : {INTERNAL_TARGET_COLUMN}")
 
     print()
     print("Frozen routing policy:")
@@ -1451,11 +2496,31 @@ def main() -> None:
     print("  Otherwise -> TSB")
 
     print()
+    print("Validated TSB parameters:")
+    print(
+        f"  alpha_demand      = {TSB_ALPHA_DEMAND}"
+    )
+    print(
+        f"  alpha_probability = {TSB_ALPHA_PROBABILITY}"
+    )
+
+    print()
     print("Running routing policy self-check...")
 
     _run_policy_self_check()
 
-    print("PASS: routing policy self-check")
+    print(
+        "PASS: routing policy self-check"
+    )
+
+    print()
+    print("Running TSB implementation self-check...")
+
+    _run_tsb_self_check()
+
+    print(
+        "PASS: TSB implementation self-check"
+    )
 
     print()
     print("=" * 80)
@@ -1479,16 +2544,16 @@ def main() -> None:
     )
 
     print(
-        "PASS: Silver MDCODE/INVDT/Demand_Qty schema is normalized "
+        "PASS: Silver MDCODE/INVDT/Demand_Qty is normalized "
         "before forecasting."
     )
 
     print(
-        "PASS: Chronos receives item_id/timestamp/target schema."
+        "PASS: Missing source IDs are removed before string conversion."
     )
 
     print(
-        "PASS: Daily calendar gaps are filled with zero demand."
+        "PASS: Daily timestamps are normalized."
     )
 
     print(
@@ -1496,24 +2561,76 @@ def main() -> None:
     )
 
     print(
-        "PASS: TSB fallback uses explicit probability and demand-size "
-        "updates."
+        "PASS: Calendar gaps are filled with zero demand."
+    )
+
+    print(
+        "PASS: Chronos receives medicine-specific history."
+    )
+
+    print(
+        "PASS: Chronos Predicted_Demand equals P50."
+    )
+
+    print(
+        "PASS: Chronos quantiles are validated for monotonicity."
+    )
+
+    print(
+        "PASS: Validated TSB probability is updated every observation."
+    )
+
+    print(
+        "PASS: Validated TSB demand estimate updates only on demand."
+    )
+
+    print(
+        "PASS: TSB output is explicitly marked as a point forecast."
+    )
+
+    print(
+        "PASS: Routing-table duplicate medicine IDs are rejected."
+    )
+
+    print(
+        "PASS: Forecast output integrity checks are enabled."
+    )
+
+    print(
+        "PASS: No unvalidated Chronos bias correction/scaling is applied."
     )
 
     print()
     print("=" * 80)
-    print("NEXT")
+    print("PRODUCTION FLOW")
     print("=" * 80)
 
     print(
-        "Use build_routing_table() with "
-        "medicine_model_robustness.parquet."
+        "Silver MDCODE/INVDT/Demand_Qty"
     )
 
     print(
-        "Then pass the routing table and the Silver "
-        "daily_demand dataframe to "
-        "ProductionForecastRouter.forecast_batch()."
+        "        -> validation + normalization"
+    )
+
+    print(
+        "        -> validation-only routing table"
+    )
+
+    print(
+        "        -> frozen 30% routing policy"
+    )
+
+    print(
+        "        -> Chronos-2 P50 OR validated TSB"
+    )
+
+    print(
+        "        -> 30-day forecast"
+    )
+
+    print(
+        "        -> output integrity validation"
     )
 
 

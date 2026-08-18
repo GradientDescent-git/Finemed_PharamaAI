@@ -4,6 +4,7 @@ import pandas as pd
 
 from finemed_ai.transform.common.helper_functions import (
     validate_columns_exist,
+    validate_dataframe_not_empty,
     safe_divide,
 )
 
@@ -161,18 +162,6 @@ def calculate_average_customer_order(
             }
         )
     )
-
-
-from __future__ import annotations
-
-import pandas as pd
-
-from finemed_ai.transform.common.helper_functions import (
-    validate_columns_exist,
-    validate_dataframe_not_empty,
-    safe_divide,
-)
-
 
 # Revenue Metrics
 
