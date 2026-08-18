@@ -37,9 +37,8 @@ def main() -> int:
  
     try:
         manifest = run_monthly_forecast(
-            silver_demand_path=args.silver_demand,
-            output_dir=args.output,
-        )
+            forecasting_series_path=args.silver_demand,
+            output_dir=args.output)
     except Exception:
         logger.exception("Forecast run failed")
         return 1

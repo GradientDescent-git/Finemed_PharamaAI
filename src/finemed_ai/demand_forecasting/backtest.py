@@ -755,12 +755,15 @@ def run_backtest(
 
                 # Evaluate every quantile as a possible point forecast.
                 for level in (
+                    "p10",
+                    "p20",
+                    "p30",
+                    "p40",
                     "p50",
                     "p60",
                     "p70",
                     "p80",
-                    "p90",
-                    ):
+                    "p90"):
 
                     predictions = q[level]
                     metrics = compute_metrics(
@@ -874,10 +877,6 @@ def run_backtest(
         / summary["Total_Actual"]
         * 100.0
     )
-    summary["WAPE_Pct"] = (
-        summary["Total_Absolute_Error"] 
-        / 
-        summary["Total_Actual"]* 100.0)
 
     summary_path = (
         output_dir

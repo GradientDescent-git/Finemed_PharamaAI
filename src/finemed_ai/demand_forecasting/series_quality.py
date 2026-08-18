@@ -122,10 +122,22 @@ def analyze_series_quality(
     # They are NOT the final business rules.
     # ------------------------------------------------------------------
 
+        # ------------------------------------------------------------------
+    # Demand-pattern classification
+    #
+    # activity_rate = proportion of calendar days with actual demand.
+    # This is different from observation density.
+    # ------------------------------------------------------------------
+
+    quality_df["demand_activity_rate"] = (
+        quality_df["active_days"]
+        / quality_df["calendar_days"]
+    )
+
     def classify(row: pd.Series) -> str:
 
         observations = row["observation_count"]
-        activity_rate = row["activity_rate"]
+        demand_activity = row["demand_activity_rate"]
 
         if observations < 30:
             return "INSUFFICIENT_HISTORY"
@@ -133,10 +145,10 @@ def analyze_series_quality(
         if observations < 90:
             return "SPARSE_HISTORY"
 
-        if activity_rate < 0.10:
+        if demand_activity < 0.05:
             return "HIGHLY_INTERMITTENT"
 
-        if activity_rate < 0.25:
+        if demand_activity < 0.20:
             return "INTERMITTENT"
 
         return "REGULAR"
@@ -148,8 +160,8 @@ def analyze_series_quality(
 
     # Chronos candidate is deliberately separate from classification.
     quality_df["forecast_candidate"] = (
-        quality_df["observation_count"] >= 90
-    )
+        (quality_df["observation_count"] >= 90)
+        & (quality_df["calendar_days"] >= 180))
 
     quality_df = quality_df.sort_values(
         ["forecast_candidate", "observation_count"],
