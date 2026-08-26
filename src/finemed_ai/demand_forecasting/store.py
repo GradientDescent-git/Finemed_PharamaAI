@@ -1735,3 +1735,69 @@ class ForecastStore:
                 continue
 
         return results
+
+    # ==================================================================
+    # Freshness & Metadata
+    # ==================================================================
+
+    def get_freshness(self) -> dict[str, Any]:
+        """
+        Extract artifact freshness metadata for production monitoring.
+        """
+        if self.is_empty():
+            return {
+                "generated_at": None,
+                "source_period": None,
+                "forecast_start": None,
+                "forecast_end": None,
+                "run_id": None,
+                "freshness_status": "MISSING",
+                "is_stale": True,
+            }
+
+        try:
+            min_date = self._df["Forecast_Date"].min()
+            max_date = self._df["Forecast_Date"].max()
+            gen_time = self._df["Generated_At"].max()
+
+            forecast_start = min_date.strftime("%Y-%m-%d") if pd.notna(min_date) else None
+            forecast_end = max_date.strftime("%Y-%m-%d") if pd.notna(max_date) else None
+            generated_at = gen_time.isoformat() if pd.notna(gen_time) else None
+
+            # Infer run_id / source_period if parent path has metadata
+            run_id = None
+            source_period = None
+            parent_dir = self.latest_path.parent
+            if (parent_dir / "manifest.json").exists():
+                try:
+                    import json
+                    with open(parent_dir / "manifest.json", "r", encoding="utf-8") as f:
+                        manifest = json.load(f)
+                        run_id = manifest.get("run_id")
+                        source_period = manifest.get("source_period")
+                except Exception:
+                    pass
+
+            status = "HEALTHY"
+            is_stale = False
+
+            return {
+                "generated_at": generated_at,
+                "source_period": source_period,
+                "forecast_start": forecast_start,
+                "forecast_end": forecast_end,
+                "run_id": run_id,
+                "freshness_status": status,
+                "is_stale": is_stale,
+            }
+        except Exception as exc:
+            logger.exception("Failed to calculate forecast freshness metadata")
+            return {
+                "generated_at": None,
+                "source_period": None,
+                "forecast_start": None,
+                "forecast_end": None,
+                "run_id": None,
+                "freshness_status": "FAILED",
+                "is_stale": True,
+            }

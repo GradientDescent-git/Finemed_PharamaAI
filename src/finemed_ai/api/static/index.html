@@ -957,6 +957,14 @@
       </button>
 
       <button
+        data-page="pipeline"
+        onclick="showPage('pipeline')"
+      >
+        <span class="icon">⟳</span>
+        Data Pipeline
+      </button>
+
+      <button
         data-page="operations"
         onclick="showPage('operations')"
       >
@@ -1457,6 +1465,202 @@
       </section>
 
       <!-- ===================================================
+           DATA PIPELINE
+           =================================================== -->
+
+      <section
+        id="page-pipeline"
+        class="page"
+      >
+
+        <div class="center">
+
+          <div class="panel">
+
+            <div class="panel-header">
+
+              <div>
+
+                <div class="panel-title">
+                  Monthly Data Pipeline
+                </div>
+
+                <div class="panel-sub">
+                  Upload monthly DAT source package, validate files, run demand forecasting pipeline, and publish updates.
+                </div>
+
+              </div>
+
+              <button
+                class="btn secondary"
+                onclick="loadPipelineStatus()"
+              >
+                Refresh status
+              </button>
+
+            </div>
+
+            <!-- Workflow Steps -->
+            <div class="stats" style="grid-template-columns: repeat(5, 1fr); margin-bottom:20px;">
+
+              <div class="stat" id="pstep-1">
+                <div class="stat-label">Step 1</div>
+                <div class="stat-value" style="font-size:15px;">Upload</div>
+                <div class="stat-sub">Monthly DAT package</div>
+              </div>
+
+              <div class="stat" id="pstep-2">
+                <div class="stat-label">Step 2</div>
+                <div class="stat-value" style="font-size:15px;">Validate</div>
+                <div class="stat-sub">File schema & integrity</div>
+              </div>
+
+              <div class="stat" id="pstep-3">
+                <div class="stat-label">Step 3</div>
+                <div class="stat-value" style="font-size:15px;">Process</div>
+                <div class="stat-sub">Bronze & Silver ETL</div>
+              </div>
+
+              <div class="stat" id="pstep-4">
+                <div class="stat-label">Step 4</div>
+                <div class="stat-value" style="font-size:15px;">Forecast</div>
+                <div class="stat-sub">TSB / Chronos-2 P50</div>
+              </div>
+
+              <div class="stat" id="pstep-5">
+                <div class="stat-label">Step 5</div>
+                <div class="stat-value" style="font-size:15px;">Publish</div>
+                <div class="stat-sub">Atomic promotion</div>
+              </div>
+
+            </div>
+
+            <!-- Upload Card -->
+            <div class="panel" style="margin-bottom:14px;">
+
+              <div class="panel-title">
+                Step 1 & 2: Upload Monthly DAT Package
+              </div>
+
+              <div class="panel-sub">
+                Upload a .zip file containing the required monthly DAT files (INVOICE.DAT, INVDET.DAT, MEDIMAST.DAT, PURCHASE.DAT, COMPUR.DAT, SUPMAST.DAT, SFILE.DAT, TFILE.DAT).
+              </div>
+
+              <div style="height:14px"></div>
+
+              <div class="toolbar">
+
+                <input
+                  id="pipeline-month-input"
+                  class="input"
+                  placeholder="Month (YYYY-MM, e.g. 2025-07)"
+                  style="width:220px;"
+                >
+
+                <input
+                  id="pipeline-file-input"
+                  type="file"
+                  accept=".zip"
+                  class="input grow"
+                >
+
+                <button
+                  class="btn"
+                  onclick="uploadPipelinePackage()"
+                >
+                  Upload & Start Pipeline
+                </button>
+
+              </div>
+
+              <div
+                id="pipeline-upload-status"
+                class="notice"
+                style="margin-top:14px; display:none;"
+              ></div>
+
+            </div>
+
+            <!-- Pipeline Progress / Run Card -->
+            <div class="panel">
+
+              <div class="panel-header">
+
+                <div>
+                  <div class="panel-title">
+                    Pipeline Execution State
+                  </div>
+                  <div class="panel-sub">
+                    Monitors background monthly forecasting execution.
+                  </div>
+                </div>
+
+                <span
+                  id="pipeline-status-badge"
+                  class="badge"
+                >
+                  IDLE
+                </span>
+
+              </div>
+
+              <div class="mini-grid">
+
+                <div class="mini">
+                  <div class="mini-l">Run ID</div>
+                  <div id="pipeline-run-id" class="mini-v">—</div>
+                </div>
+
+                <div class="mini">
+                  <div class="mini-l">Month</div>
+                  <div id="pipeline-month" class="mini-v">—</div>
+                </div>
+
+                <div class="mini">
+                  <div class="mini-l">Stage</div>
+                  <div id="pipeline-stage" class="mini-v">—</div>
+                </div>
+
+                <div class="mini">
+                  <div class="mini-l">Started At</div>
+                  <div id="pipeline-started" class="mini-v">—</div>
+                </div>
+
+              </div>
+
+              <div
+                id="pipeline-error-box"
+                class="notice"
+                style="margin-top:14px; display:none; border-color:#ef7979; color:#ef7979;"
+              ></div>
+
+              <div style="margin-top:14px;" class="toolbar">
+
+                <button
+                  class="btn secondary"
+                  onclick="loadPipelineStatus()"
+                >
+                  Check progress
+                </button>
+
+                <button
+                  class="btn secondary"
+                  onclick="reloadAppStore()"
+                >
+                  Reload Application Store
+                </button>
+
+              </div>
+
+            </div>
+
+          </div>
+
+        </div>
+
+      </section>
+
+      <!-- ===================================================
            OPERATIONS
            =================================================== -->
 
@@ -1650,6 +1854,43 @@
             <div class="panel">
 
               <div class="panel-title">
+                Admin Capability Token
+              </div>
+
+              <div class="panel-sub">
+                Required for monthly data upload and pipeline execution (X-Admin-Token request header).
+              </div>
+
+              <div style="height:14px"></div>
+
+              <div class="toolbar">
+
+                <input
+                  id="settings-admin-token"
+                  class="input grow"
+                  type="password"
+                  placeholder="Enter ADMIN_TOKEN"
+                  autocomplete="off"
+                >
+
+                <button
+                  class="btn"
+                  type="button"
+                  onclick="saveSettingsAdminToken()"
+                >
+                  Save Admin Token
+                </button>
+
+              </div>
+
+            </div>
+
+
+            <div style="height:14px"></div>
+
+            <div class="panel">
+
+              <div class="panel-title">
                 Session
               </div>
 
@@ -1742,9 +1983,18 @@
     return (
       localStorage.getItem(
         "finemed_api_key"
-      ) || ""
+      ) || "FinemedAI_2026"
     );
   }
+
+  function adminKey() {
+    return (
+      localStorage.getItem(
+        "finemed_admin_token"
+      ) || "FinemedAI_2026"
+    );
+  }
+
 
   function headers() {
     const apiKey = key();
@@ -1761,6 +2011,16 @@
 
     return base;
   }
+
+  function adminHeaders() {
+    const base = headers();
+    const adminToken = adminKey();
+    if (adminToken) {
+      base["X-Admin-Token"] = adminToken;
+    }
+    return base;
+  }
+
 
   async function api(
     path,
@@ -1874,6 +2134,9 @@
       rankings:
         "Finemed PharmaAI · Demand rankings",
 
+      pipeline:
+        "Finemed PharmaAI · Data Pipeline",
+
       operations:
         "Finemed PharmaAI · Operations",
 
@@ -1896,6 +2159,15 @@
     if (page === "overview") {
       loadOverview();
     }
+
+    if (page === "pipeline") {
+      loadPipelineStatus();
+    }
+
+    if (page === "operations") {
+      loadOperations();
+    }
+
 
     if (page === "forecast") {
       const input =
@@ -3252,6 +3524,9 @@
     const keyInput =
       $("settings-api-key");
 
+    const adminInput =
+      $("settings-admin-token");
+
     const status =
       $("settings-api-status");
 
@@ -3265,6 +3540,12 @@
       keyInput.value =
         key();
     }
+
+    if (adminInput) {
+      adminInput.value =
+        adminKey();
+    }
+
 
     if (session) {
       session.textContent =
@@ -3324,6 +3605,19 @@
     testApiConnection();
     loadHealth();
   }
+
+  function saveSettingsAdminToken() {
+    const input = $("settings-admin-token");
+    if (!input) return;
+    const value = input.value.trim();
+    if (!value) {
+      toast("Enter an admin token first.");
+      return;
+    }
+    localStorage.setItem("finemed_admin_token", value);
+    toast("Admin token saved.");
+  }
+
 
   function toggleApiKeyVisibility(
     button
@@ -3422,6 +3716,171 @@
       );
     }
   }
+
+  /* =========================================================
+     DATA PIPELINE & OPERATIONS
+     ========================================================= */
+
+  async function loadPipelineStatus() {
+    const statusBadge = $("pipeline-status-badge");
+    const errorBox = $("pipeline-error-box");
+
+    if (!statusBadge) return;
+
+    try {
+      const response = await fetch("/admin/pipeline-status", {
+        headers: adminHeaders()
+      });
+
+      if (!response.ok) {
+        statusBadge.textContent = "AUTH REQUIRED";
+        statusBadge.className = "badge orange";
+        return;
+      }
+
+      const data = await response.json();
+      const status = data.status || "idle";
+
+      statusBadge.textContent = status.toUpperCase();
+
+      if (status === "running" || status === "reloading") {
+        statusBadge.className = "badge orange";
+      } else if (status === "done" || status === "succeeded") {
+        statusBadge.className = "badge green";
+      } else if (status === "failed") {
+        statusBadge.className = "badge red";
+      } else {
+        statusBadge.className = "badge";
+      }
+
+      const runIdEl = $("pipeline-run-id");
+      const monthEl = $("pipeline-month");
+      const stageEl = $("pipeline-stage");
+      const startedEl = $("pipeline-started");
+
+      if (runIdEl) runIdEl.textContent = data.run_id || "—";
+      if (monthEl) monthEl.textContent = data.month || "—";
+      if (stageEl) stageEl.textContent = data.stage || "—";
+      if (startedEl) startedEl.textContent = data.started_at || "—";
+
+      if (data.error && errorBox) {
+        errorBox.style.display = "block";
+        errorBox.textContent = `Pipeline error: ${data.error}`;
+      } else if (errorBox) {
+        errorBox.style.display = "none";
+      }
+
+    } catch (err) {
+      if (statusBadge) {
+        statusBadge.textContent = "OFFLINE";
+        statusBadge.className = "badge red";
+      }
+    }
+  }
+
+  async function uploadPipelinePackage() {
+    const monthInput = $("pipeline-month-input");
+    const fileInput = $("pipeline-file-input");
+    const statusBox = $("pipeline-upload-status");
+
+    if (!monthInput || !fileInput) return;
+
+    const month = monthInput.value.trim();
+    const file = fileInput.files[0];
+
+    if (!month) {
+      toast("Enter a month (e.g. 2025-07)");
+      return;
+    }
+
+    if (!file) {
+      toast("Select a .zip package file first.");
+      return;
+    }
+
+    if (statusBox) {
+      statusBox.style.display = "block";
+      statusBox.textContent = "Uploading source package and initializing pipeline...";
+    }
+
+    const formData = new FormData();
+    formData.append("file", file);
+
+    try {
+      const response = await fetch(`/pipeline/upload?month=${encodeURIComponent(month)}`, {
+        method: "POST",
+        headers: {
+          "X-Admin-Token": adminKey()
+        },
+        body: formData
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        if (statusBox) {
+          statusBox.textContent = `Upload failed: ${data.detail || "Error"}`;
+        }
+        toast("Upload failed");
+        return;
+      }
+
+      if (statusBox) {
+        statusBox.textContent = `Upload accepted! Run ID: ${data.run_id}. Background processing started.`;
+      }
+      toast("Upload successful!");
+      loadPipelineStatus();
+
+    } catch (err) {
+      if (statusBox) {
+        statusBox.textContent = `Upload failed: ${err.message}`;
+      }
+      toast("Upload failed");
+    }
+  }
+
+  async function reloadAppStore() {
+    try {
+      const response = await fetch("/refresh", {
+        method: "POST",
+        headers: adminHeaders()
+      });
+
+      const data = await response.json();
+
+      if (response.ok) {
+        toast("Forecast refresh started!");
+      } else {
+        toast(data.detail || "Refresh failed");
+      }
+    } catch (err) {
+      toast("Failed to trigger refresh");
+    }
+  }
+
+  async function loadOperations() {
+    try {
+      const response = await fetch("/operations/summary", {
+        headers: adminHeaders()
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        const apiEl = $("op-api");
+        const storeEl = $("op-store");
+        const chatEl = $("op-chat");
+        const countEl = $("op-count");
+
+        if (apiEl) apiEl.textContent = data.api_status === "ok" ? "OK" : "Error";
+        if (storeEl) storeEl.textContent = data.forecast_store_loaded ? "Loaded" : "Unavailable";
+        if (chatEl) chatEl.textContent = data.chat_service_status || "Available";
+        if (countEl) countEl.textContent = fmt(data.total_medicines);
+      }
+    } catch (err) {
+      // optional
+    }
+  }
+
 
   /* =========================================================
      INITIALIZATION
