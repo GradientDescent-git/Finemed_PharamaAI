@@ -57,8 +57,10 @@ all = [
 pythonpath = [".", "src"]
 testpaths = ["tests"]
 filterwarnings = [
-    "ignore::Warning",
+    "ignore::DeprecationWarning:starlette.*",
+    "ignore::DeprecationWarning:httpx.*",
 ]
+
 
 
 
