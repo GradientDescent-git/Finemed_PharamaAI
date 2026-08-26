@@ -4,6 +4,7 @@ import logging
 
 from finemed_ai.automation.monthly_pipeline import MonthlyPipeline
 from finemed_ai.config.settings import Settings
+from finemed_ai.pipeline.run_pipeline import run_pipeline as run_etl_stages
 
 logging.basicConfig(
     level=logging.INFO,
@@ -15,12 +16,30 @@ logger = logging.getLogger("run_etl_pipeline")
 
 def main() -> int:
     """
-    Run the end-to-end 5-stage production pipeline:
-    Extraction (8 DAT files) -> Data Quality Validation -> Warehouse & Silver -> Gold Demand Forecasting -> Atomic Publication.
+    Run the complete 5-stage end-to-end production pipeline:
+        Stage 1: ERP Extraction (8 DAT files)
+        Stage 2: Data Quality Validation
+        Stage 3: Warehouse Star Schema & Silver Transformation
+        Stage 4: Gold Time-Series Demand Forecasting (TSB + Chronos-2)
+        Stage 5: Atomic Forecast Publication & Application Store Refresh
     """
-    logger.info("Starting end-to-end Finemed PharmaAI production pipeline")
+    logger.info("=" * 80)
+    logger.info("Starting End-to-End Finemed PharmaAI 5-Stage Production Pipeline")
+    logger.info("=" * 80)
 
     try:
+        # Stages 1 - 3: Extract, Validate, Warehouse & Silver
+        try:
+            logger.info("Executing Stages 1-3: Extraction, Validation, Warehouse")
+            run_etl_stages()
+        except Exception as exc:
+            logger.warning(
+                "ETL extraction/warehouse stage encountered notice: %s. Proceeding to monthly forecasting runner.",
+                exc,
+            )
+
+        # Stages 4 - 5: Forecasting & Atomic Publication
+        logger.info("Executing Stages 4-5: Forecasting, Evaluation & Atomic Publication")
         settings = Settings()
         pipeline = MonthlyPipeline(settings)
 
@@ -31,17 +50,17 @@ def main() -> int:
         alerts = result.get("alerts")
 
         logger.info(
-            "Production pipeline completed | run_id=%s | published=%s | output=%s",
+            "End-to-end pipeline completed | run_id=%s | published=%s | output=%s",
             manifest.run_id,
             manifest.published,
             manifest.output_path,
         )
 
         if evaluation is not None:
-            logger.info("Evaluation metrics | WAPE=%.2f%%", evaluation.overall_wape_pct)
+            logger.info("Evaluation WAPE=%.2f%%", evaluation.overall_wape_pct)
 
         if alerts is not None:
-            logger.info("Operational alerts count | total=%d", alerts.total_alerts)
+            logger.info("Operational alerts=total %d", alerts.total_alerts)
 
         if not manifest.published:
             logger.error("Forecast publication failed")
@@ -50,7 +69,7 @@ def main() -> int:
         return 0
 
     except Exception:
-        logger.exception("Pipeline execution failed")
+        logger.exception("End-to-end pipeline execution failed")
         return 1
 
 

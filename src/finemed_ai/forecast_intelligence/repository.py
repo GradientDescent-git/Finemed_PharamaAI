@@ -81,10 +81,23 @@ class ForecastRepository:
     def _create_default_medicines() -> pd.DataFrame:
         return pd.DataFrame(
             [
-                {"MDCODE": "0001", "MDNAME": "OTACARE EAR DROPS 5ML"},
-                {"MDCODE": "0002", "MDNAME": "KEELAC EYE DROPS 5ML"},
+                {
+                    "MDCODE": "0001",
+                    "MDNAME": "OTACARE EAR DROPS 5ML",
+                    "Product_Display_Name": "OTACARE EAR DROPS 5ML",
+                    "SUPNO": "S001",
+                    "PACKG": "5ML",
+                },
+                {
+                    "MDCODE": "0002",
+                    "MDNAME": "KEELAC EYE DROPS 5ML",
+                    "Product_Display_Name": "KEELAC EYE DROPS 5ML",
+                    "SUPNO": "S001",
+                    "PACKG": "5ML",
+                },
             ]
         )
+
 
     def load_forecasts(self) -> pd.DataFrame:
         """Load currently promoted production forecast or fallback default."""

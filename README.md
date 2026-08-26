@@ -1,6 +1,9 @@
 # Finemed PharmaAI — Demand Intelligence Platform
 
+![Tests](https://github.com/GradientDescent-git/Finemed_PharamaAI/actions/workflows/test.yml/badge.svg)
+
 Finemed PharmaAI is an enterprise-grade demand intelligence, ML forecasting, and conversational analytics platform designed for pharmaceutical distribution and inventory planning.
+
 
 ---
 
