@@ -1,0 +1,12 @@
+{
+  "run_id": "20260821_173534_30e3c9",
+  "started_at": "2026-08-21T17:35:34.752105Z",
+  "completed_at": "2026-08-21T17:36:01.611857Z",
+  "medicines_requested": 93,
+  "medicines_succeeded": 93,
+  "medicines_failed": 0,
+  "failed_medicine_ids": [],
+  "output_path": "data\\05_gold\\demand_forecasting\\production_forecasts\\20260821_173534_30e3c9\\forecast.parquet",
+  "published": true,
+  "publish_note": "Published successfully: forecastable succeeded=93/93 (100.0%); dormant=65; total_population=158. Validated output promoted to latest.parquet."
+}

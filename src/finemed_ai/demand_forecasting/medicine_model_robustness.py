@@ -203,29 +203,34 @@ def aggregate_model_errors(df, model_name):
             ]
         )
 
+    # ------------------------------------------------------------------
+    # # Recompute absolute error from the canonical Actual/Predicted
+    # columns instead of trusting the upstream Absolute_Error field.
+    #
+    # This is critical because the upstream backtest artifact can contain
+    # stale/inconsistent Absolute_Error values.
+    # # ------------------------------------------------------------------
+    
+    df["Row_Absolute_Error"] = (df["Actual"] - df["Predicted"]).abs()
+
     result = (
         df.groupby(
             [
                 "Split",
                 "Medicine_ID",
-            ],
-            as_index=False,
-        )
-        .agg(
-            Actual=(
-                "Actual",
-                "sum",
-            ),
-            Predicted=(
-                "Predicted",
-                "sum",
-            ),
-            Absolute_Error=(
-                "Absolute_Error",
-                "sum",
-            ),
-        )
-    )
+                ],
+                as_index=False,
+                )
+                .agg(
+                    Actual=(
+                        "Actual","sum",),
+
+                    Predicted=(
+                        "Predicted",
+                        "sum",),
+                    Absolute_Error=(
+                        "Row_Absolute_Error",
+                        "sum",)))
 
     # Safe WAPE calculation.
     result[f"{model_name}_WAPE"] = np.where(

@@ -1,0 +1,12 @@
+{
+  "run_id": "20260820_151540_55922b",
+  "started_at": "2026-08-20T15:15:40.146909Z",
+  "completed_at": "2026-08-20T15:16:38.530658Z",
+  "medicines_requested": 158,
+  "medicines_succeeded": 158,
+  "medicines_failed": 0,
+  "failed_medicine_ids": [],
+  "output_path": "data\\05_gold\\demand_forecasting\\production_forecasts\\20260820_151540_55922b\\forecast.parquet",
+  "published": true,
+  "publish_note": "Published successfully: 158/158 medicines succeeded (100.0%)."
+}

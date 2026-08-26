@@ -25,15 +25,37 @@ _LOCK = threading.Lock()
 
 
 class RunStatus:
-    STAGES = ["queued", "etl", "demand_prep", "forecasting", "done", "failed"]
+    STAGES = [
+        "queued",
+        "etl",
+        "demand_prep",
+        "forecasting",
+        "reloading",
+        "clearing_sessions",
+        "done",
+        "failed"]
 
     def __init__(self, status_file: Path):
         self.status_file = status_file
         self.status_file.parent.mkdir(parents=True, exist_ok=True)
 
-    def _write(self, data: dict) -> None:
+    def _write(self,data: dict) -> None:
+        payload = json.dumps(
+            data,
+            indent=2,
+            default=str)
+
+        temporary_file = (
+            self.status_file.with_name(
+                f".{self.status_file.name}.tmp"))
+
         with _LOCK:
-            self.status_file.write_text(json.dumps(data, indent=2, default=str))
+            temporary_file.write_text(
+                payload,
+                encoding="utf-8")
+
+            temporary_file.replace(
+                self.status_file)
 
     def start(self, run_id: str, month: str) -> None:
         self._write({

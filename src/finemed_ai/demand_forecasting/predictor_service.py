@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import logging
+import threading
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import Optional, Sequence
+from threading import RLock
 
 import numpy as np
 import pandas as pd
@@ -21,65 +23,62 @@ from finemed_ai.demand_forecasting.schemas import (
 logger = logging.getLogger(__name__)
 
 
-# ============================================================================
+# =============================================================================
 # ERRORS
-# ============================================================================
+# =============================================================================
 
 
 class InsufficientHistoryError(ValueError):
-    """Raised when a medicine has no usable history to forecast from."""
+    """Raised when a medicine does not have sufficient usable history."""
 
 
-# ============================================================================
+class ForecastValidationError(ValueError):
+    """Raised when input or model forecast output violates the data contract."""
+
+
+# =============================================================================
 # PREDICTOR SERVICE
-# ============================================================================
+# =============================================================================
 
 
 class PredictorService:
     """
-    Production Chronos-2 predictor service.
+    Production Chronos-2 forecasting service.
 
     Responsibilities
     ----------------
     1. Validate the incoming dataframe contract.
-    2. Filter history for one medicine.
-    3. Normalize timestamps.
+    2. Isolate history for one medicine.
+    3. Normalize and validate timestamps.
     4. Validate demand values.
-    5. Aggregate duplicate observations on the same day.
-    6. Calendarize the series to continuous daily frequency.
-    7. Apply the validated 730-observation context limit.
-    8. Execute Chronos-2 probabilistic forecasting.
-    9. Validate the returned forecast.
-    10. Convert the result into the project's typed forecast schema.
+    5. Aggregate duplicate daily observations.
+    6. Calendarize to a continuous daily time series.
+    7. Apply the configured maximum context length.
+    8. Execute Chronos-2 inference.
+    9. Validate the returned forecast contract.
+    10. Enforce non-negative, monotonic quantiles.
+    11. Convert the forecast into typed project schemas.
+    12. Support isolated batch failures.
 
-    Production configuration is supplied through ForecastConfig.
-
-    Validated production configuration:
-
-        model_id:
-            amazon/chronos-2
-
-        context_length:
-            730
-
-        prediction_length:
-            30
-
-        point forecast:
-            P50
-
-        quantiles:
-            P10 ... P90
-
-        bias correction:
-            disabled
+    Production assumptions
+    ----------------------
+    - Chronos-2 model: amazon/chronos-2
+    - Daily demand frequency
+    - Missing calendar days represent zero observed demand
+    - Context length is a maximum window, not a minimum requirement
+    - Point forecast is the configured quantile, normally P50
+    - Negative forecast values are clamped to zero
+    - Quantile crossing is repaired using cumulative maximum
     """
 
     _instance: Optional["PredictorService"] = None
+    _instance_lock = threading.RLock()
 
-    # ------------------------------------------------------------------------
-    # Construction
-    # ------------------------------------------------------------------------
+    _MIN_OBSERVATIONS = 3
+
+    # -------------------------------------------------------------------------
+    # CONSTRUCTION
+    # -------------------------------------------------------------------------
 
     def __init__(
         self,
@@ -89,100 +88,203 @@ class PredictorService:
         """
         Initialize the Chronos-2 predictor.
 
-        The Chronos model is loaded once per PredictorService instance.
+        The model is loaded once for each PredictorService instance.
         """
 
         if config is None:
-            raise ValueError(
-                "config must not be None."
-            )
+            raise ValueError("config must not be None.")
 
         self.config = config
 
-        self.device = self._resolve_device(
-            device
-        )
+        self._validate_config()
+
+        self.device = self._resolve_device(device)
+
+        self._prediction_lock = RLock()
 
         logger.info(
-            "Loading Chronos-2 | model=%s | device=%s | "
-            "context=%d | horizon=%d | point=P%d",
-            config.model_id,
+            (
+                "Loading Chronos-2 | model=%s | device=%s | "
+                "context=%d | horizon=%d | point=P%d"
+            ),
+            self.config.model_id,
             self.device,
-            config.context_length,
-            config.prediction_length,
-            int(config.point_quantile * 100),
+            self.config.context_length,
+            self.config.prediction_length,
+            int(self.config.point_quantile * 100),
         )
 
-        t0 = datetime.now(
-            timezone.utc
-        )
+        started_at = datetime.now(timezone.utc)
 
         try:
             import torch
-
             from chronos import Chronos2Pipeline
 
         except ImportError as exc:
             raise ImportError(
-                "Chronos-2 dependencies are not available. "
-                "Ensure torch and the chronos package are installed "
+                "Chronos-2 dependencies are unavailable. "
+                "Ensure both PyTorch and chronos are installed "
                 "in the active environment."
             ) from exc
 
-        # --------------------------------------------------------------------
-        # Torch dtype
-        # --------------------------------------------------------------------
-        #
-        # CUDA:
-        #     bfloat16 is used as in the validated implementation.
-        #
-        # CPU:
-        #     float32 is used for compatibility.
-        # --------------------------------------------------------------------
-
-        torch_dtype = (
-            torch.bfloat16
-            if self.device == "cuda"
-            else torch.float32
+        torch_dtype = self._resolve_torch_dtype(
+            torch=torch,
+            device=self.device,
         )
 
         try:
-            self.pipeline = (
-                Chronos2Pipeline.from_pretrained(
-                    config.model_id,
-                    device_map=self.device,
-                    torch_dtype=torch_dtype,
-                )
+            self.pipeline = Chronos2Pipeline.from_pretrained(
+                self.config.model_id,
+                device_map=self.device,
+                torch_dtype=torch_dtype,
             )
 
         except Exception as exc:
             logger.exception(
-                "Failed to load Chronos-2 model=%s on device=%s.",
-                config.model_id,
+                "Failed to load Chronos-2 | model=%s | device=%s",
+                self.config.model_id,
                 self.device,
             )
 
             raise RuntimeError(
                 "Failed to initialize Chronos-2 pipeline "
-                f"for model={config.model_id!r} "
+                f"for model={self.config.model_id!r} "
                 f"on device={self.device!r}."
             ) from exc
 
-        elapsed = (
-            datetime.now(timezone.utc) - t0
+        elapsed_seconds = (
+            datetime.now(timezone.utc) - started_at
         ).total_seconds()
 
         logger.info(
-            "Chronos-2 loaded successfully | model=%s | "
-            "device=%s | elapsed=%.1fs",
-            config.model_id,
+            (
+                "Chronos-2 loaded successfully | model=%s | "
+                "device=%s | elapsed=%.2fs"
+            ),
+            self.config.model_id,
             self.device,
-            elapsed,
+            elapsed_seconds,
         )
 
-    # ------------------------------------------------------------------------
-    # Device
-    # ------------------------------------------------------------------------
+    def _get_prediction_lock(self) -> RLock:
+        lock = getattr(self, "_prediction_lock", None)
+
+        if lock is None:
+            lock = RLock()
+            self._prediction_lock = lock
+
+        return lock
+
+    # -------------------------------------------------------------------------
+    # CONFIGURATION VALIDATION
+    # -------------------------------------------------------------------------
+
+    def _validate_config(self) -> None:
+        """
+        Validate ForecastConfig invariants required by this service.
+        """
+
+        cfg = self.config
+
+        if not str(cfg.model_id).strip():
+            raise ValueError("config.model_id must not be empty.")
+
+        if cfg.context_length < self._MIN_OBSERVATIONS:
+            raise ValueError(
+                "config.context_length must be at least "
+                f"{self._MIN_OBSERVATIONS}."
+            )
+
+        if cfg.prediction_length <= 0:
+            raise ValueError(
+                "config.prediction_length must be greater than zero."
+            )
+
+        if not cfg.quantile_levels:
+            raise ValueError(
+                "config.quantile_levels must not be empty."
+            )
+
+        quantiles = tuple(
+            float(level)
+            for level in cfg.quantile_levels
+        )
+
+        if len(set(quantiles)) != len(quantiles):
+            raise ValueError(
+                "config.quantile_levels must not contain duplicates."
+            )
+
+        if tuple(sorted(quantiles)) != quantiles:
+            raise ValueError(
+                "config.quantile_levels must be strictly sorted "
+                "in ascending order."
+            )
+
+        if any(
+            level <= 0.0 or level >= 1.0
+            for level in quantiles
+        ):
+            raise ValueError(
+                "All config.quantile_levels must be strictly "
+                "between 0 and 1."
+            )
+
+        point_quantile = float(cfg.point_quantile)
+
+        if point_quantile not in quantiles:
+            raise ValueError(
+                "config.point_quantile must exist in "
+                "config.quantile_levels."
+            )
+
+        required_schema_fields = {
+            "id_column": cfg.id_column,
+            "timestamp_column": cfg.timestamp_column,
+            "target_column": cfg.target_column,
+        }
+
+        for field_name, value in required_schema_fields.items():
+            if not str(value).strip():
+                raise ValueError(
+                    f"config.{field_name} must not be empty."
+                )
+
+        if len(
+            {
+                cfg.id_column,
+                cfg.timestamp_column,
+                cfg.target_column,
+            }
+        ) != 3:
+            raise ValueError(
+                "id_column, timestamp_column and target_column "
+                "must be distinct."
+            )
+
+        # The current QuantileForecast schema exposes P10 through P90.
+        required_schema_quantiles = (
+            0.1,
+            0.2,
+            0.3,
+            0.4,
+            0.5,
+            0.6,
+            0.7,
+            0.8,
+            0.9,
+        )
+
+        if tuple(quantiles) != required_schema_quantiles:
+            raise ValueError(
+                "The current QuantileForecast schema requires exactly "
+                "quantiles (0.1, 0.2, ..., 0.9). "
+                f"Received: {quantiles}"
+            )
+
+    # -------------------------------------------------------------------------
+    # DEVICE RESOLUTION
+    # -------------------------------------------------------------------------
 
     @staticmethod
     def _resolve_device(
@@ -191,37 +293,32 @@ class PredictorService:
         """
         Resolve the execution device.
 
-        If no device is explicitly supplied:
+        Automatic selection:
 
             CUDA available -> cuda
-            otherwise       -> cpu
+            otherwise      -> cpu
         """
 
         if device is not None:
 
-            normalized = (
-                str(device)
-                .strip()
-                .lower()
-            )
+            normalized = str(device).strip().lower()
 
             if not normalized:
                 raise ValueError(
                     "device must not be empty."
                 )
 
-            supported_prefixes = (
-                "cpu",
-                "cuda",
-                "mps",
+            valid = (
+                normalized == "cpu"
+                or normalized == "mps"
+                or normalized == "cuda"
+                or normalized.startswith("cuda:")
             )
 
-            if not normalized.startswith(
-                supported_prefixes
-            ):
+            if not valid:
                 raise ValueError(
                     f"Unsupported device={device!r}. "
-                    "Expected cpu, cuda, or mps."
+                    "Expected 'cpu', 'mps', 'cuda', or 'cuda:N'."
                 )
 
             return normalized
@@ -229,20 +326,39 @@ class PredictorService:
         try:
             import torch
 
-            if torch.cuda.is_available():
-                return "cuda"
-
-        except ImportError:
+        except ImportError as exc:
             raise ImportError(
-                "PyTorch is required to initialize "
-                "PredictorService."
-            )
+                "PyTorch is required to resolve the execution device."
+            ) from exc
+
+        if torch.cuda.is_available():
+            return "cuda"
+
+        if (
+            hasattr(torch.backends, "mps")
+            and torch.backends.mps.is_available()
+        ):
+            return "mps"
 
         return "cpu"
 
-    # ------------------------------------------------------------------------
-    # Singleton
-    # ------------------------------------------------------------------------
+    @staticmethod
+    def _resolve_torch_dtype(
+        torch,
+        device: str,
+    ):
+        """
+        Select a safe inference dtype for the selected device.
+        """
+
+        if device.startswith("cuda"):
+            return torch.bfloat16
+
+        return torch.float32
+
+    # -------------------------------------------------------------------------
+    # SINGLETON
+    # -------------------------------------------------------------------------
 
     @classmethod
     def get_instance(
@@ -253,85 +369,78 @@ class PredictorService:
         """
         Return the process-wide PredictorService instance.
 
-        The singleton is configuration-safe.
-
-        If an instance already exists, requesting a different configuration
-        or device raises an error instead of silently reusing the existing
-        model with incompatible settings.
+        The singleton is configuration-safe and thread-safe.
         """
 
         if config is None:
-            raise ValueError(
-                "config must not be None."
+            raise ValueError("config must not be None.")
+
+        with cls._instance_lock:
+
+            if cls._instance is None:
+
+                cls._instance = cls(
+                    config=config,
+                    device=device,
+                )
+
+                return cls._instance
+
+            existing = cls._instance
+
+            if existing.config != config:
+                raise RuntimeError(
+                    "PredictorService singleton already exists with a "
+                    "different ForecastConfig. Reset the service before "
+                    "creating it with another configuration."
+                )
+
+            requested_device = (
+                cls._resolve_device(device)
+                if device is not None
+                else existing.device
             )
 
-        if cls._instance is None:
+            if requested_device != existing.device:
+                raise RuntimeError(
+                    "PredictorService singleton already exists on "
+                    f"device={existing.device!r}, but "
+                    f"device={requested_device!r} was requested. "
+                    "Reset the service before changing devices."
+                )
 
-            cls._instance = cls(
-                config=config,
-                device=device,
-            )
-
-            return cls._instance
-
-        existing = cls._instance
-
-        if existing.config != config:
-
-            raise RuntimeError(
-                "PredictorService singleton already exists with a "
-                "different ForecastConfig. Reset the service before "
-                "creating it with another configuration."
-            )
-
-        requested_device = (
-            existing._resolve_device(device)
-            if device is not None
-            else existing.device
-        )
-
-        if requested_device != existing.device:
-
-            raise RuntimeError(
-                "PredictorService singleton already exists on "
-                f"device={existing.device!r}, but "
-                f"device={requested_device!r} was requested. "
-                "Reset the service before changing devices."
-            )
-
-        return existing
+            return existing
 
     @classmethod
     def reset_instance(cls) -> None:
         """
-        Reset the singleton.
+        Reset the process-wide singleton.
 
-        Intended primarily for tests and controlled process lifecycle
-        management.
+        Intended for tests and controlled application shutdown.
         """
 
-        instance = cls._instance
+        with cls._instance_lock:
 
-        cls._instance = None
+            instance = cls._instance
+            cls._instance = None
 
-        if instance is not None:
+            if instance is None:
+                return
 
-            # Explicitly release the pipeline reference.
             instance.pipeline = None
 
-            # Release CUDA memory when applicable.
             try:
+                import gc
                 import torch
+
+                gc.collect()
 
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
 
             except Exception:
-                # Resetting the singleton must not fail merely because
-                # optional GPU cleanup is unavailable.
                 logger.debug(
-                    "Unable to perform CUDA cleanup during "
-                    "PredictorService reset.",
+                    "Unable to fully clean up PredictorService resources.",
                     exc_info=True,
                 )
 
@@ -344,39 +453,67 @@ class PredictorService:
         history_df: pd.DataFrame,
     ) -> None:
         """
-        Validate the dataframe contract before filtering.
+        Validate the incoming dataframe contract.
         """
 
-        if not isinstance(
-            history_df,
-            pd.DataFrame,
-        ):
+        if not isinstance(history_df, pd.DataFrame):
             raise TypeError(
                 "history_df must be a pandas DataFrame."
             )
 
-        required = {
+        required_columns = {
             self.config.id_column,
             self.config.timestamp_column,
             self.config.target_column,
         }
 
-        missing = (
-            required
+        missing_columns = (
+            required_columns
             - set(history_df.columns)
         )
 
-        if missing:
-            raise ValueError(
+        if missing_columns:
+            raise ForecastValidationError(
                 "History dataframe is missing required columns: "
-                f"{sorted(missing)}. "
-                f"Expected columns: {sorted(required)}"
+                f"{sorted(missing_columns)}. "
+                f"Expected: {sorted(required_columns)}"
             )
 
         if history_df.empty:
             raise InsufficientHistoryError(
                 "History dataframe is empty."
             )
+
+    # =========================================================================
+    # TIMESTAMP NORMALIZATION
+    # =========================================================================
+
+    @staticmethod
+    def _normalize_timestamps(
+        values: pd.Series,
+    ) -> pd.Series:
+        """
+        Convert timestamps to timezone-naive normalized daily timestamps.
+
+        UTC is used when timezone-aware timestamps are supplied so that
+        mixed timezone representations do not silently produce inconsistent
+        calendar days.
+        """
+
+        timestamps = pd.to_datetime(
+            values,
+            errors="coerce",
+            utc=True,
+        )
+
+        if timestamps.isna().any():
+            return timestamps
+
+        return (
+            timestamps
+            .dt.tz_convert(None)
+            .dt.normalize()
+        )
 
     # =========================================================================
     # HISTORY PREPARATION
@@ -388,88 +525,66 @@ class PredictorService:
         history_df: pd.DataFrame,
     ) -> pd.DataFrame:
         """
-        Prepare one medicine as a complete daily time series.
+        Convert raw medicine observations into a continuous daily series.
 
-        Processing:
+        Pipeline
+        --------
 
-            raw transaction history
-                    |
-                    v
-            filter medicine
-                    |
-                    v
-            validate timestamps/demand
-                    |
-                    v
-            normalize timestamps
-                    |
-                    v
-            aggregate same-day transactions
-                    |
-                    v
-            construct continuous daily calendar
-                    |
-                    v
-            fill missing dates with zero demand
-                    |
-                    v
-            Chronos-ready daily series
+        raw history
+            -> filter medicine
+            -> normalize ID
+            -> validate timestamps
+            -> validate demand
+            -> aggregate duplicate dates
+            -> create complete daily calendar
+            -> fill missing days with zero demand
+            -> validate final series
         """
 
         cfg = self.config
 
-        item_id = str(
-            item_id
-        ).strip()
+        normalized_item_id = str(item_id).strip()
 
-        if not item_id:
+        if not normalized_item_id:
             raise ValueError(
                 "item_id must not be empty."
             )
 
-        self._validate_input_schema(
-            history_df
-        )
-
-        # --------------------------------------------------------------------
-        # Filter medicine
-        # --------------------------------------------------------------------
+        self._validate_input_schema(history_df)
 
         normalized_ids = (
-            history_df[
-                cfg.id_column
-            ]
-            .astype(str)
+            history_df[cfg.id_column]
+            .astype("string")
             .str.strip()
         )
 
-        history = history_df[
-            normalized_ids == item_id
+        history = history_df.loc[
+            normalized_ids == normalized_item_id,
+            [
+                cfg.id_column,
+                cfg.timestamp_column,
+                cfg.target_column,
+            ],
         ].copy()
 
         if history.empty:
             raise InsufficientHistoryError(
-                f"No history for item_id={item_id}"
+                f"No history found for item_id={normalized_item_id!r}."
             )
 
-        # --------------------------------------------------------------------
-        # Normalize ID
-        # --------------------------------------------------------------------
+        # ---------------------------------------------------------------------
+        # Normalize medicine ID
+        # ---------------------------------------------------------------------
 
-        history[cfg.id_column] = (
-            history[cfg.id_column]
-            .astype(str)
-            .str.strip()
-        )
+        history[cfg.id_column] = normalized_item_id
 
-        # --------------------------------------------------------------------
-        # Parse timestamps
-        # --------------------------------------------------------------------
+        # ---------------------------------------------------------------------
+        # Normalize timestamps
+        # ---------------------------------------------------------------------
 
         history[cfg.timestamp_column] = (
-            pd.to_datetime(
-                history[cfg.timestamp_column],
-                errors="coerce",
+            self._normalize_timestamps(
+                history[cfg.timestamp_column]
             )
         )
 
@@ -480,24 +595,22 @@ class PredictorService:
 
         if invalid_dates.any():
 
-            count = int(
+            invalid_count = int(
                 invalid_dates.sum()
             )
 
-            raise ValueError(
-                f"item_id={item_id} contains "
-                f"{count} invalid timestamp(s)."
+            raise ForecastValidationError(
+                f"item_id={normalized_item_id!r} contains "
+                f"{invalid_count} invalid timestamp(s)."
             )
 
-        # --------------------------------------------------------------------
-        # Parse demand
-        # --------------------------------------------------------------------
+        # ---------------------------------------------------------------------
+        # Normalize demand
+        # ---------------------------------------------------------------------
 
-        history[cfg.target_column] = (
-            pd.to_numeric(
-                history[cfg.target_column],
-                errors="coerce",
-            )
+        history[cfg.target_column] = pd.to_numeric(
+            history[cfg.target_column],
+            errors="coerce",
         )
 
         invalid_targets = (
@@ -507,138 +620,84 @@ class PredictorService:
 
         if invalid_targets.any():
 
-            count = int(
+            invalid_count = int(
                 invalid_targets.sum()
             )
 
-            raise ValueError(
-                f"item_id={item_id} contains "
-                f"{count} non-numeric demand value(s)."
+            raise ForecastValidationError(
+                f"item_id={normalized_item_id!r} contains "
+                f"{invalid_count} non-numeric demand value(s)."
             )
 
-        # --------------------------------------------------------------------
-        # Validate finite demand
-        # --------------------------------------------------------------------
-
-        demand_array = (
+        demand = (
             history[cfg.target_column]
             .to_numpy(dtype=float)
         )
 
-        if not np.isfinite(
-            demand_array
-        ).all():
-
-            raise ValueError(
-                f"item_id={item_id} contains "
+        if not np.isfinite(demand).all():
+            raise ForecastValidationError(
+                f"item_id={normalized_item_id!r} contains "
                 "non-finite demand values."
             )
 
-        # --------------------------------------------------------------------
-        # Validate non-negative demand
-        # --------------------------------------------------------------------
-
-        if (
-            history[cfg.target_column] < 0
-        ).any():
-
-            raise ValueError(
-                f"item_id={item_id} contains "
+        if (demand < 0.0).any():
+            raise ForecastValidationError(
+                f"item_id={normalized_item_id!r} contains "
                 "negative demand values."
             )
 
-        # --------------------------------------------------------------------
-        # Normalize timestamps to daily frequency
-        # --------------------------------------------------------------------
+        # ---------------------------------------------------------------------
+        # Aggregate duplicate observations
+        # ---------------------------------------------------------------------
 
-        history[cfg.timestamp_column] = (
-            history[cfg.timestamp_column]
-            .dt.normalize()
-        )
-
-        # --------------------------------------------------------------------
-        # Aggregate duplicate same-day observations
-        # --------------------------------------------------------------------
-
-        history = (
+        daily_observed = (
             history
             .groupby(
                 cfg.timestamp_column,
                 as_index=False,
+                sort=True,
             )[cfg.target_column]
             .sum()
         )
 
-        if history.empty:
+        if daily_observed.empty:
             raise InsufficientHistoryError(
-                f"item_id={item_id} has no usable observations."
+                f"item_id={normalized_item_id!r} has no usable observations."
             )
 
-        # --------------------------------------------------------------------
-        # Validate aggregated demand
-        # --------------------------------------------------------------------
-
-        aggregated_demand = (
-            history[cfg.target_column]
+        aggregated_values = (
+            daily_observed[cfg.target_column]
             .to_numpy(dtype=float)
         )
 
-        if not np.isfinite(
-            aggregated_demand
-        ).all():
-
-            raise ValueError(
-                f"item_id={item_id} contains "
-                "non-finite demand after daily aggregation."
+        if not np.isfinite(aggregated_values).all():
+            raise ForecastValidationError(
+                f"item_id={normalized_item_id!r} contains "
+                "non-finite values after daily aggregation."
             )
 
-        if (
-            history[cfg.target_column] < 0
-        ).any():
-
-            raise ValueError(
-                f"item_id={item_id} contains "
-                "negative demand after daily aggregation."
+        if (aggregated_values < 0.0).any():
+            raise ForecastValidationError(
+                f"item_id={normalized_item_id!r} contains "
+                "negative values after daily aggregation."
             )
 
-        # --------------------------------------------------------------------
-        # Sort
-        # --------------------------------------------------------------------
+        daily_observed = daily_observed.sort_values(
+            cfg.timestamp_column,
+            kind="stable",
+        )
 
-        history = history.sort_values(
+        start_date = daily_observed[
             cfg.timestamp_column
-        )
+        ].iloc[0]
 
-        start_date = (
-            history[cfg.timestamp_column]
-            .min()
-        )
+        end_date = daily_observed[
+            cfg.timestamp_column
+        ].iloc[-1]
 
-        end_date = (
-            history[cfg.timestamp_column]
-            .max()
-        )
-
-        if pd.isna(
-            start_date
-        ) or pd.isna(
-            end_date
-        ):
-
-            raise ValueError(
-                f"item_id={item_id} has an invalid "
-                "history date range."
-            )
-
-        if end_date < start_date:
-            raise ValueError(
-                f"item_id={item_id} has an invalid "
-                f"date range: {start_date} > {end_date}."
-            )
-
-        # --------------------------------------------------------------------
-        # Construct complete daily calendar
-        # --------------------------------------------------------------------
+        # ---------------------------------------------------------------------
+        # Calendarization
+        # ---------------------------------------------------------------------
 
         complete_dates = pd.date_range(
             start=start_date,
@@ -647,22 +706,12 @@ class PredictorService:
         )
 
         daily = (
-            history
-            .set_index(
-                cfg.timestamp_column
-            )
-            .reindex(
-                complete_dates
-            )
-            .rename_axis(
-                cfg.timestamp_column
-            )
+            daily_observed
+            .set_index(cfg.timestamp_column)
+            .reindex(complete_dates)
+            .rename_axis(cfg.timestamp_column)
             .reset_index()
         )
-
-        # --------------------------------------------------------------------
-        # Missing calendar days represent zero observed demand.
-        # --------------------------------------------------------------------
 
         daily[cfg.target_column] = (
             pd.to_numeric(
@@ -670,9 +719,10 @@ class PredictorService:
                 errors="coerce",
             )
             .fillna(0.0)
+            .astype(float)
         )
 
-        daily[cfg.id_column] = item_id
+        daily[cfg.id_column] = normalized_item_id
 
         daily = daily[
             [
@@ -680,96 +730,80 @@ class PredictorService:
                 cfg.timestamp_column,
                 cfg.target_column,
             ]
-        ]
+        ].copy()
 
-        # --------------------------------------------------------------------
-        # Final daily validation
-        # --------------------------------------------------------------------
+        # ---------------------------------------------------------------------
+        # Final validation
+        # ---------------------------------------------------------------------
 
         expected_rows = (
-            end_date - start_date
-        ).days + 1
+            (end_date - start_date).days + 1
+        )
 
         if len(daily) != expected_rows:
-
-            raise ValueError(
-                f"Daily calendar construction failed for "
-                f"item_id={item_id}: expected "
-                f"{expected_rows} rows, got {len(daily)}."
+            raise ForecastValidationError(
+                f"Calendar construction failed for "
+                f"item_id={normalized_item_id!r}: "
+                f"expected {expected_rows} rows, "
+                f"received {len(daily)}."
             )
 
-        if (
-            daily[cfg.timestamp_column]
-            .duplicated()
-            .any()
-        ):
-
-            raise ValueError(
+        if daily[cfg.timestamp_column].duplicated().any():
+            raise ForecastValidationError(
                 f"Duplicate dates remain after calendarization "
-                f"for item_id={item_id}."
+                f"for item_id={normalized_item_id!r}."
             )
 
-        final_demand = (
+        final_values = (
             daily[cfg.target_column]
             .to_numpy(dtype=float)
         )
 
-        if not np.isfinite(
-            final_demand
-        ).all():
-
-            raise ValueError(
-                f"Calendarized history contains non-finite "
-                f"demand for item_id={item_id}."
+        if not np.isfinite(final_values).all():
+            raise ForecastValidationError(
+                f"Calendarized history contains non-finite demand "
+                f"for item_id={normalized_item_id!r}."
             )
 
-        if (
-            daily[cfg.target_column] < 0
-        ).any():
-
-            raise ValueError(
-                f"Calendarized history contains negative "
-                f"demand for item_id={item_id}."
+        if (final_values < 0.0).any():
+            raise ForecastValidationError(
+                f"Calendarized history contains negative demand "
+                f"for item_id={normalized_item_id!r}."
             )
 
         if len(daily) >= 3:
 
-            inferred_freq = pd.infer_freq(
+            inferred_frequency = pd.infer_freq(
                 daily[cfg.timestamp_column]
             )
 
-            if inferred_freq not in {
-                "D",
-                "1D",
-            }:
-
-                raise ValueError(
+            if inferred_frequency not in {"D", "1D"}:
+                raise ForecastValidationError(
                     f"Daily frequency validation failed for "
-                    f"item_id={item_id}: "
-                    f"inferred_freq={inferred_freq!r}"
+                    f"item_id={normalized_item_id!r}: "
+                    f"inferred_frequency={inferred_frequency!r}."
                 )
 
         zero_days = int(
-            (
-                daily[cfg.target_column]
-                == 0
-            ).sum()
+            (daily[cfg.target_column] == 0.0).sum()
         )
 
         logger.info(
-            "CHRONOS DAILY HISTORY | item=%s | rows=%d | "
-            "start=%s | end=%s | zero_days=%d",
-            item_id,
+            (
+                "CHRONOS DAILY HISTORY | item=%s | rows=%d | "
+                "start=%s | end=%s | zero_days=%d"
+            ),
+            normalized_item_id,
             len(daily),
-            start_date,
-            end_date,
+            start_date.date(),
+            end_date.date(),
             zero_days,
         )
 
         return daily
 
     # =========================================================================
-    # CORE FORECASTING
+    # SINGLE MEDICINE FORECAST
     # =========================================================================
 
     def forecast_medicine(
@@ -779,275 +813,246 @@ class PredictorService:
     ) -> MedicineForecastResult:
         """
         Forecast one medicine for the configured prediction horizon.
-
-        The input does not need to be calendarized.
-
-        This method guarantees that Chronos receives:
-
-            item_id
-            timestamp
-            target
-
-        with a continuous daily timestamp sequence.
         """
 
         cfg = self.config
 
-        item_id = str(
-            item_id
-        ).strip()
+        normalized_item_id = str(item_id).strip()
 
-        if not item_id:
+        if not normalized_item_id:
             raise ValueError(
                 "item_id must not be empty."
             )
 
+        history = self._prepare_medicine_history(
+            item_id=normalized_item_id,
+            history_df=history_df,
+        )
+
+        # ---------------------------------------------------------------------
+        # Apply maximum production context
+        # ---------------------------------------------------------------------
+
         history = (
-            self._prepare_medicine_history(
-                item_id=item_id,
-                history_df=history_df,
-            )
+            history
+            .tail(cfg.context_length)
+            .copy()
         )
 
-        # --------------------------------------------------------------------
-        # Apply validated production context.
-        #
-        # Important:
-        # We use the most recent observations because the production
-        # configuration is frozen at 730 daily observations.
-        # --------------------------------------------------------------------
+        context_used = len(history)
 
-        history = history.tail(
-            cfg.context_length
-        ).copy()
-
-        actual_context = len(history)
-
-        if actual_context == 0:
+        if context_used < self._MIN_OBSERVATIONS:
             raise InsufficientHistoryError(
-                f"item_id={item_id} has no observations "
-                "after context preparation."
+                f"item_id={normalized_item_id!r} has only "
+                f"{context_used} daily observation(s); "
+                f"minimum {self._MIN_OBSERVATIONS} required."
             )
 
-        # --------------------------------------------------------------------
-        # Minimum Chronos context
-        # --------------------------------------------------------------------
-
-        min_observations = 3
-
-        if actual_context < min_observations:
-
-            raise InsufficientHistoryError(
-                f"item_id={item_id} has only "
-                f"{actual_context} daily observation(s); "
-                f"minimum {min_observations} required "
-                "for Chronos-2."
-            )
-
-        logger.info(
-            "CHRONOS INPUT | item=%s | configured_context=%d | "
-            "actual_rows=%d | start=%s | end=%s",
-            item_id,
-            cfg.context_length,
-            actual_context,
-            history[cfg.timestamp_column].min(),
-            history[cfg.timestamp_column].max(),
-        )
-
-        # --------------------------------------------------------------------
-        # Short-context warning
-        # --------------------------------------------------------------------
-        #
-        # We do NOT reject shorter histories here.
-        #
-        # Some medicines legitimately have less than 730 days of history.
-        # The validated production context is therefore a MAXIMUM context,
-        # not a requirement that every medicine must have 730 observations.
-        # --------------------------------------------------------------------
-
-        if actual_context < cfg.context_length:
-
+        if context_used < cfg.context_length:
             logger.warning(
-                "SHORT CHRONOS CONTEXT | item=%s | "
-                "actual_context=%d | configured_context=%d",
-                item_id,
-                actual_context,
+                (
+                    "SHORT CHRONOS CONTEXT | item=%s | "
+                    "actual=%d | configured=%d"
+                ),
+                normalized_item_id,
+                context_used,
                 cfg.context_length,
             )
 
-        # --------------------------------------------------------------------
-        # Execute Chronos-2
-        # --------------------------------------------------------------------
+        history_start = history[
+            cfg.timestamp_column
+        ].iloc[0]
+
+        history_end = history[
+            cfg.timestamp_column
+        ].iloc[-1]
+
+        logger.info(
+            (
+                "CHRONOS INPUT | item=%s | configured_context=%d | "
+                "actual_rows=%d | start=%s | end=%s"
+            ),
+            normalized_item_id,
+            cfg.context_length,
+            context_used,
+            history_start.date(),
+            history_end.date(),
+        )
+
+        # ---------------------------------------------------------------------
+        # Execute Chronos inference
+        # ---------------------------------------------------------------------
 
         try:
 
-            raw = self.pipeline.predict_df(
-                history,
-                prediction_length=(
-                    cfg.prediction_length
-                ),
-                quantile_levels=list(
-                    cfg.quantile_levels
-                ),
-                id_column=cfg.id_column,
-                timestamp_column=(
-                    cfg.timestamp_column
-                ),
-                target=cfg.target_column,
-            )
+            with self._get_prediction_lock():
+
+                raw_forecast = self.pipeline.predict_df(
+                    history,
+                    prediction_length=cfg.prediction_length,
+                    quantile_levels=list(
+                        cfg.quantile_levels
+                    ),
+                    id_column=cfg.id_column,
+                    timestamp_column=cfg.timestamp_column,
+                    target=cfg.target_column,
+                )
 
         except Exception as exc:
 
             logger.exception(
-                "Chronos-2 prediction failed for item_id=%s.",
-                item_id,
+                "Chronos-2 prediction failed | item=%s",
+                normalized_item_id,
             )
 
             raise RuntimeError(
-                f"Chronos-2 prediction failed "
-                f"for item_id={item_id}."
+                "Chronos-2 prediction failed "
+                f"for item_id={normalized_item_id!r}."
             ) from exc
 
-        # --------------------------------------------------------------------
-        # Validate raw result
-        # --------------------------------------------------------------------
+        # ---------------------------------------------------------------------
+        # Validate Chronos output
+        # ---------------------------------------------------------------------
 
         self._validate_raw_forecast(
-            item_id=item_id,
-            raw_forecast=raw,
+            item_id=normalized_item_id,
+            raw_forecast=raw_forecast,
+            history_end=history_end,
         )
 
-        # --------------------------------------------------------------------
-        # Convert to project schema
-        # --------------------------------------------------------------------
+        # ---------------------------------------------------------------------
+        # Convert to typed result
+        # ---------------------------------------------------------------------
 
         return self._to_result(
-            item_id=item_id,
-            context_used=actual_context,
-            raw_forecast=raw,
+            item_id=normalized_item_id,
+            context_used=context_used,
+            raw_forecast=raw_forecast,
         )
 
     # =========================================================================
-    # BATCH FORECASTING
+    # BATCH FORECAST
     # =========================================================================
 
     def forecast_batch(
         self,
         history_df: pd.DataFrame,
-        item_ids: Optional[List[str]] = None,
+        item_ids: Optional[Sequence[str]] = None,
     ) -> tuple[
-        List[MedicineForecastResult],
-        List[str],
+        list[MedicineForecastResult],
+        list[str],
     ]:
         """
         Forecast multiple medicines.
 
-        Failures are isolated at medicine level.
+        Failure is isolated at medicine level.
 
-        Returns:
+        Returns
+        -------
+        results:
+            Successfully generated forecasts.
 
-            results:
-                Successfully forecast medicines.
-
-            failed:
-                Medicine IDs whose forecast failed.
+        failed:
+            Medicine IDs that could not be forecast.
         """
 
-        self._validate_input_schema(
-            history_df
-        )
+        self._validate_input_schema(history_df)
 
         cfg = self.config
 
-        # --------------------------------------------------------------------
-        # Determine medicine IDs
-        # --------------------------------------------------------------------
-
         if item_ids is None:
 
-            ids = sorted(
-                history_df[
-                    cfg.id_column
-                ]
-                .astype(str)
+            ids = (
+                history_df[cfg.id_column]
+                .astype("string")
                 .str.strip()
+                .dropna()
+                .loc[lambda values: values != ""]
                 .unique()
+                .tolist()
+            )
+
+            ids = sorted(
+                str(value)
+                for value in ids
             )
 
         else:
 
-            ids = [
-                str(item_id).strip()
-                for item_id in item_ids
-                if str(item_id).strip()
-            ]
+            ids = []
 
-            # Preserve order while removing duplicates.
-            ids = list(
-                dict.fromkeys(ids)
-            )
+            for item_id in item_ids:
+
+                normalized = str(item_id).strip()
+
+                if normalized:
+                    ids.append(normalized)
+
+            ids = list(dict.fromkeys(ids))
 
         if not ids:
-
             raise ValueError(
                 "No medicine IDs available for forecasting."
             )
 
         logger.info(
-            "Starting Chronos-2 batch forecast | "
-            "medicines=%d | context=%d | horizon=%d",
+            (
+                "Starting Chronos-2 batch forecast | medicines=%d | "
+                "context=%d | horizon=%d"
+            ),
             len(ids),
             cfg.context_length,
             cfg.prediction_length,
         )
 
-        results: List[
+        results: list[
             MedicineForecastResult
         ] = []
 
-        failed: List[str] = []
+        failed: list[str] = []
 
         for item_id in ids:
 
             try:
 
-                result = (
-                    self.forecast_medicine(
-                        item_id=item_id,
-                        history_df=history_df,
-                    )
+                result = self.forecast_medicine(
+                    item_id=item_id,
+                    history_df=history_df,
                 )
 
-                results.append(
-                    result
-                )
+                results.append(result)
 
             except InsufficientHistoryError as exc:
 
                 logger.warning(
-                    "Chronos forecast skipped | item=%s | reason=%s",
+                    (
+                        "Chronos forecast skipped | "
+                        "item=%s | reason=%s"
+                    ),
                     item_id,
                     exc,
                 )
 
-                failed.append(
-                    item_id
-                )
+                failed.append(item_id)
 
-            except Exception:
+            except Exception as exc:
 
                 logger.exception(
-                    "Chronos forecast failed | item=%s",
+                    (
+                        "Chronos forecast failed | "
+                        "item=%s | error=%s"
+                    ),
                     item_id,
+                    exc,
                 )
 
-                failed.append(
-                    item_id
-                )
+                failed.append(item_id)
 
         logger.info(
-            "Chronos-2 batch forecast completed | "
-            "requested=%d | successful=%d | failed=%d",
+            (
+                "Chronos-2 batch forecast completed | "
+                "requested=%d | successful=%d | failed=%d"
+            ),
             len(ids),
             len(results),
             len(failed),
@@ -1056,144 +1061,193 @@ class PredictorService:
         return results, failed
 
     # =========================================================================
-    # RAW CHRONOS OUTPUT VALIDATION
+    # RAW FORECAST VALIDATION
     # =========================================================================
 
     def _validate_raw_forecast(
         self,
         item_id: str,
         raw_forecast: pd.DataFrame,
+        history_end: pd.Timestamp,
     ) -> None:
         """
-        Validate the raw dataframe returned by Chronos-2's predict_df().
+        Validate Chronos-2 predict_df() output.
 
-        IMPORTANT (fixed 2026-08): Chronos-2's predict_df() is called with
-        history already filtered to ONE medicine, and its return value
-        contains ONLY the forecast `timestamp` column plus the quantile
-        columns ("0.1".."0.9") -- it does NOT echo back an id/item_id
-        column or a separate "target"/point-forecast column. This was
-        confirmed directly against the real amazon/chronos-2 model on real
-        production data (a full monthly batch run against 158 real
-        medicines succeeded using exactly this contract). A previous
-        version of this method incorrectly required `id_column` and
-        `target_column` to be present in raw_forecast, and separately
-        tried to cross-validate a "target" column and an echoed-back
-        medicine ID against this file -- both checks would fail on every
-        single real forecast, since those columns never exist. Do not
-        re-add those checks without first confirming, against a real
-        predict_df() call, that the installed chronos-forecasting version
-        actually returns them.
+        Expected contract
+        -----------------
 
-        The production point forecast is P50 (the "0.5" quantile column)
-        directly -- there is no separate value to cross-check it against.
+        Chronos-2 is called using history for a single medicine.
+
+        The production output is expected to contain:
+
+            timestamp
+            0.1
+            0.2
+            ...
+            0.9
+
+        The model does not need to echo the medicine ID.
+
+        The configured point forecast is taken directly from the configured
+        quantile, normally the "0.5" / P50 column.
         """
 
         cfg = self.config
 
         if not isinstance(raw_forecast, pd.DataFrame):
-            raise TypeError("Chronos output must be a pandas DataFrame.")
+            raise TypeError(
+                "Chronos output must be a pandas DataFrame."
+            )
 
         if raw_forecast.empty:
             raise InsufficientHistoryError(
-                f"Chronos returned no forecast rows for item_id={item_id}."
+                f"Chronos returned no forecast rows "
+                f"for item_id={item_id!r}."
             )
 
-        expected_quantile_columns = [str(level) for level in cfg.quantile_levels]
-        required_columns = {cfg.timestamp_column, *expected_quantile_columns}
+        quantile_columns = [
+            str(float(level))
+            for level in cfg.quantile_levels
+        ]
 
-        missing = required_columns - set(raw_forecast.columns)
-        if missing:
-            raise ValueError(
-                f"Chronos output is missing required columns: {sorted(missing)}"
+        required_columns = {
+            cfg.timestamp_column,
+            *quantile_columns,
+        }
+
+        missing_columns = (
+            required_columns
+            - set(raw_forecast.columns)
+        )
+
+        if missing_columns:
+            raise ForecastValidationError(
+                "Chronos output is missing required columns: "
+                f"{sorted(missing_columns)}."
             )
 
-        expected_horizon = cfg.prediction_length
-        if len(raw_forecast) != expected_horizon:
-            raise ValueError(
-                f"Chronos returned {len(raw_forecast)} forecast row(s) for "
-                f"item_id={item_id}; expected {expected_horizon}."
+        if len(raw_forecast) != cfg.prediction_length:
+            raise ForecastValidationError(
+                f"Chronos returned {len(raw_forecast)} row(s) "
+                f"for item_id={item_id!r}; expected "
+                f"{cfg.prediction_length}."
             )
 
-        # --------------------------------------------------------------------
-        # Validate timestamps
-        # --------------------------------------------------------------------
+        # ---------------------------------------------------------------------
+        # Timestamp validation
+        # ---------------------------------------------------------------------
 
-        timestamps = pd.to_datetime(raw_forecast[cfg.timestamp_column], errors="coerce")
+        timestamps = pd.to_datetime(
+            raw_forecast[cfg.timestamp_column],
+            errors="coerce",
+            utc=True)
 
         if timestamps.isna().any():
-            raise ValueError(
-                f"Chronos returned invalid forecast timestamps for item_id={item_id}."
-            )
-
-        timestamps = timestamps.dt.normalize()
-
+            raise ForecastValidationError(
+                f"Chronos returned invalid forecast timestamps "
+                f"for item_id={item_id!r}.")
+            
+        timestamps = (
+            timestamps
+            .dt.tz_convert(None).dt.normalize())
+            
         if timestamps.duplicated().any():
-            raise ValueError(
-                f"Chronos returned duplicate forecast dates for item_id={item_id}."
-            )
+            raise ForecastValidationError(
+                f"Chronos returned duplicate forecast dates "
+                f"for item_id={item_id!r}.")
 
         if not timestamps.is_monotonic_increasing:
-            raise ValueError(
-                f"Chronos forecast dates are not sorted for item_id={item_id}."
+            raise ForecastValidationError(
+                f"Chronos forecast dates are not sorted "
+                f"for item_id={item_id!r}.")
+            
+        expected_dates = pd.date_range(
+            start=pd.Timestamp(history_end).normalize()
+            + pd.Timedelta(days=1),
+            periods=cfg.prediction_length,
+            freq="D",)
+            
+        actual_dates = (
+            timestamps.reset_index(drop=True).to_numpy(dtype="datetime64[ns]"))
+            
+        expected_dates_array = (
+            expected_dates.to_numpy(dtype="datetime64[ns]"))
+
+        if not np.array_equal(
+            actual_dates,
+            expected_dates_array):
+
+            raise ForecastValidationError(
+                f"Chronos returned an unexpected forecast horizon "
+                f"for item_id={item_id!r}. "
+                f"Expected {expected_dates[0].date()} through "
+                f"{expected_dates[-1].date()}.")
+
+        # ---------------------------------------------------------------------
+        # Quantile validation
+        # ---------------------------------------------------------------------
+
+        for column in quantile_columns:
+
+            values = pd.to_numeric(
+                raw_forecast[column],
+                errors="coerce",
             )
 
-        # --------------------------------------------------------------------
-        # Validate quantile values
-        # --------------------------------------------------------------------
-
-        for column in expected_quantile_columns:
-            values = pd.to_numeric(raw_forecast[column], errors="coerce")
-
             if values.isna().any():
-                raise ValueError(
-                    f"Chronos returned non-numeric {column} quantile values "
-                    f"for item_id={item_id}."
+                raise ForecastValidationError(
+                    f"Chronos returned non-numeric values in "
+                    f"quantile column {column!r} "
+                    f"for item_id={item_id!r}."
                 )
 
             array = values.to_numpy(dtype=float)
 
             if not np.isfinite(array).all():
-                raise ValueError(
-                    f"Chronos returned non-finite {column} quantile values "
-                    f"for item_id={item_id}."
+                raise ForecastValidationError(
+                    f"Chronos returned non-finite values in "
+                    f"quantile column {column!r} "
+                    f"for item_id={item_id!r}."
                 )
 
-            if (array < 0).any():
-                raise ValueError(
-                    f"Chronos returned negative {column} quantile values "
-                    f"for item_id={item_id}."
-                )
-
-        # --------------------------------------------------------------------
-        # Validate quantile ordering (P10 <= P20 <= ... <= P90)
-        # --------------------------------------------------------------------
-
-        quantile_arrays = [
-            pd.to_numeric(raw_forecast[column], errors="raise").to_numpy(dtype=float)
-            for column in expected_quantile_columns
-        ]
-
-        # Per spec section 12: non-monotonic quantiles are NOT a hard
-        # rejection here -- the production formatter (_to_result, below)
-        # defensively applies cumulative-max correction and logs a
-        # warning when it actually has to correct something. This is an
-        # explicit, documented production policy, not a gap -- do not
-        # change this back to a hard raise without updating that policy
-        # first. This block only logs so the (rare) occurrence is visible
-        # in monitoring without failing the forecast outright.
-        for quantile_index in range(len(quantile_arrays) - 1):
-            lower = quantile_arrays[quantile_index]
-            upper = quantile_arrays[quantile_index + 1]
-
-            if (lower > upper).any():
-                lower_name = expected_quantile_columns[quantile_index]
-                upper_name = expected_quantile_columns[quantile_index + 1]
+            if (array < 0.0).any():
                 logger.warning(
-                    "Chronos quantile ordering violation for item_id=%s: "
-                    "%s exceeds %s -- will be corrected via cumulative max "
-                    "in _to_result().",
-                    item_id, lower_name, upper_name,
+                    (
+                        "Negative Chronos quantile values detected | "
+                        "item=%s | quantile=%s | policy=clamp_to_zero"
+                    ),
+                    item_id,
+                    column,
                 )
+
+        # ---------------------------------------------------------------------
+        # Quantile ordering validation
+        # ---------------------------------------------------------------------
+
+        quantile_matrix = np.column_stack(
+            [
+                pd.to_numeric(
+                    raw_forecast[column],
+                    errors="raise",
+                ).to_numpy(dtype=float)
+                for column in quantile_columns
+            ]
+        )
+
+        if (
+            np.diff(
+                quantile_matrix,
+                axis=1,
+            ) < 0.0
+        ).any():
+
+            logger.warning(
+                (
+                    "Chronos quantile crossing detected | item=%s | "
+                    "policy=cumulative_max_repair"
+                ),
+                item_id,
+            )
 
     # =========================================================================
     # RESULT CONVERSION
@@ -1206,180 +1260,131 @@ class PredictorService:
         raw_forecast: pd.DataFrame,
     ) -> MedicineForecastResult:
         """
-        Convert validated Chronos output into the project's typed schema.
+        Convert validated Chronos output into project forecast schemas.
 
-        The production point forecast is explicitly P50.
+        Production policy:
+
+        1. Convert values to float.
+        2. Clamp negative values to zero.
+        3. Repair quantile crossing using cumulative maximum.
+        4. Use the configured point quantile as predicted_demand.
         """
 
         cfg = self.config
 
-        expected_quantile_columns = [
-            str(level)
+        quantile_columns = [
+            str(float(level))
             for level in cfg.quantile_levels
         ]
 
-        # --------------------------------------------------------------------
-        # P50 must exist because it is the production point forecast.
-        # --------------------------------------------------------------------
-
-        p50_column = str(
-            cfg.point_quantile
+        point_column = str(
+            float(cfg.point_quantile)
         )
 
-        if p50_column not in (
-            raw_forecast.columns
-        ):
-
-            raise ValueError(
+        if point_column not in raw_forecast.columns:
+            raise ForecastValidationError(
                 f"Configured point quantile column "
-                f"{p50_column!r} is missing from Chronos output."
+                f"{point_column!r} is missing."
             )
 
-        days: List[
-            ForecastDayResult
-        ] = []
+        days: list[ForecastDayResult] = []
 
         for _, row in raw_forecast.iterrows():
 
-            # ----------------------------------------------------------------
-            # Extract quantiles
-            # ----------------------------------------------------------------
-
-            raw_values = [
-                max(
-                    float(
-                        row[column]
-                    ),
-                    0.0,
+            forecast_date = (
+                pd.Timestamp(
+                    row[cfg.timestamp_column]
                 )
-                for column in expected_quantile_columns
-            ]
-
-            # ----------------------------------------------------------------
-            # Defensive monotonicity enforcement
-            # ----------------------------------------------------------------
-            #
-            # Chronos output is validated above. This remains as a defensive
-            # final boundary so that tiny numerical irregularities cannot
-            # produce an invalid production interval.
-            # ----------------------------------------------------------------
-
-            monotonic_values: List[
-                float
-            ] = []
-
-            running_max = 0.0
-            corrected = False
-
-            for value in raw_values:
-
-                if value < running_max:
-
-                    corrected = True
-                    value = running_max
-
-                running_max = value
-
-                monotonic_values.append(
-                    value
-                )
-
-            if corrected:
-
-                logger.warning(
-                    "Non-monotonic Chronos quantiles detected "
-                    "for item_id=%s on %s. "
-                    "Corrected using cumulative maximum. "
-                    "Raw=%s",
-                    item_id,
-                    row[cfg.timestamp_column],
-                    raw_values,
-                )
-
-            # ----------------------------------------------------------------
-            # Build typed quantile object
-            # ----------------------------------------------------------------
-
-            quantiles = QuantileForecast(
-                p10=monotonic_values[0],
-                p20=monotonic_values[1],
-                p30=monotonic_values[2],
-                p40=monotonic_values[3],
-                p50=monotonic_values[4],
-                p60=monotonic_values[5],
-                p70=monotonic_values[6],
-                p80=monotonic_values[7],
-                p90=monotonic_values[8],
+                .normalize()
             )
 
-            # ----------------------------------------------------------------
-            # Explicitly use configured point quantile.
-            # ----------------------------------------------------------------
+            raw_values = np.asarray(
+                [
+                    float(row[column])
+                    for column in quantile_columns
+                ],
+                dtype=float,
+            )
 
-            point_quantile_name = (
-                f"p{int(cfg.point_quantile * 100)}"
+            # Non-negative demand policy.
+            sanitized_values = np.maximum(
+                raw_values,
+                0.0,
+            )
+
+            # Monotonic quantile policy.
+            corrected_values = np.maximum.accumulate(
+                sanitized_values
+            )
+
+            if not np.array_equal(
+                raw_values,
+                corrected_values,
+            ):
+                logger.warning(
+                    (
+                        "Forecast quantiles corrected | item=%s | "
+                        "date=%s | raw=%s | corrected=%s"
+                    ),
+                    item_id,
+                    forecast_date.date(),
+                    raw_values.tolist(),
+                    corrected_values.tolist(),
+                )
+
+            quantiles = QuantileForecast(
+                p10=float(corrected_values[0]),
+                p20=float(corrected_values[1]),
+                p30=float(corrected_values[2]),
+                p40=float(corrected_values[3]),
+                p50=float(corrected_values[4]),
+                p60=float(corrected_values[5]),
+                p70=float(corrected_values[6]),
+                p80=float(corrected_values[7]),
+                p90=float(corrected_values[8]),
+            )
+
+            point_attribute = (
+                f"p{int(float(cfg.point_quantile) * 100)}"
             )
 
             try:
-
-                point = float(
+                predicted_demand = float(
                     getattr(
                         quantiles,
-                        point_quantile_name,
+                        point_attribute,
                     )
                 )
 
             except AttributeError as exc:
-
-                raise ValueError(
-                    f"QuantileForecast does not contain "
-                    f"configured point quantile "
-                    f"{point_quantile_name!r}."
+                raise ForecastValidationError(
+                    f"QuantileForecast does not expose "
+                    f"{point_attribute!r}."
                 ) from exc
-
-            # ----------------------------------------------------------------
-            # Forecast date
-            # ----------------------------------------------------------------
-
-            forecast_date = pd.Timestamp(
-                row[cfg.timestamp_column]
-            ).normalize()
 
             days.append(
                 ForecastDayResult(
                     forecast_date=forecast_date.date(),
                     predicted_demand=round(
-                        point,
+                        predicted_demand,
                         2,
                     ),
                     quantiles=quantiles,
                 )
             )
 
-        # --------------------------------------------------------------------
-        # Final horizon validation
-        # --------------------------------------------------------------------
-
-        if len(days) != (
-            cfg.prediction_length
-        ):
-
-            raise ValueError(
-                f"Result conversion produced {len(days)} "
-                f"forecast day(s); expected "
-                f"{cfg.prediction_length}."
+        if len(days) != cfg.prediction_length:
+            raise ForecastValidationError(
+                f"Result conversion produced {len(days)} forecast "
+                f"day(s); expected {cfg.prediction_length}."
             )
 
         return MedicineForecastResult(
-            medicine_id=str(
-                item_id
-            ),
+            medicine_id=str(item_id),
             generated_at=datetime.now(
                 timezone.utc
             ),
-            context_length_used=int(
-                context_used
-            ),
+            context_length_used=int(context_used),
             prediction_length=int(
                 cfg.prediction_length
             ),

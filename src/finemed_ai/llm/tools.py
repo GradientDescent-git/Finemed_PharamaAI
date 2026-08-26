@@ -1,209 +1,500 @@
 from __future__ import annotations
- 
+
 from typing import Any, Dict
- 
-from finemed_ai.demand_forecasting.store import ForecastNotFoundError, ForecastStore
- 
-# ---------------------------------------------------------------------------
-# Anthropic tool schemas (JSON schema, per Claude tool-use spec)
-# ---------------------------------------------------------------------------
- 
+
+from finemed_ai.demand_forecasting.store import (
+    ForecastNotFoundError,
+    ForecastStore,
+)
+
+
+# ============================================================================
+# Anthropic tool schemas
+# ============================================================================
+
 TOOL_SCHEMAS = [
     {
         "name": "get_forecast",
         "description": (
-            "Get the raw day-by-day 30-day demand forecast for one medicine, "
+            "Get the raw day-by-day demand forecast for one medicine, "
             "including P10-P90 uncertainty quantiles. Use this when the "
-            "employee asks for specific numbers, a specific date's forecast, "
-            "or the full forecast table."
+            "employee asks for specific forecast values, a specific date, "
+            "or the full forecast."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "medicine_id": {
                     "type": "string",
-                    "description": "The medicine code (MDCODE), e.g. '42'.",
+                    "description": (
+                        "The medicine code (MDCODE), "
+                        "for example '42'."
+                    ),
                 }
             },
-            "required": ["medicine_id"],
+            "required": [
+                "medicine_id"
+            ],
         },
     },
     {
         "name": "get_trend",
         "description": (
-            "Get the demand trend direction (increasing/decreasing/stable/flat) "
-            "and percent change for a medicine over its 30-day forecast window. "
-            "Use this when the employee asks whether demand is going up, down, "
-            "or is expected to change."
+            "Get the demand trend direction and percentage change for "
+            "a medicine over its forecast horizon."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "medicine_id": {"type": "string", "description": "The medicine code (MDCODE)."}
+                "medicine_id": {
+                    "type": "string",
+                    "description": (
+                        "The medicine code (MDCODE)."
+                    ),
+                }
             },
-            "required": ["medicine_id"],
+            "required": [
+                "medicine_id"
+            ],
         },
     },
     {
         "name": "get_summary",
         "description": (
-            "Get a plain-language summary of a medicine's forecast: total "
-            "expected demand, average daily demand, peak and trough days. "
-            "Use this for general 'how is X looking' or 'summarize the "
-            "forecast for X' questions."
+            "Get a summary of a medicine's forecast including total "
+            "expected demand, average daily demand, peak, trough, "
+            "and trend information."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "medicine_id": {"type": "string", "description": "The medicine code (MDCODE)."}
+                "medicine_id": {
+                    "type": "string",
+                    "description": (
+                        "The medicine code (MDCODE)."
+                    ),
+                }
             },
-            "required": ["medicine_id"],
+            "required": [
+                "medicine_id"
+            ],
         },
     },
     {
         "name": "get_top_demand_medicines",
         "description": (
-            "Get the medicines with the HIGHEST total predicted demand over "
-            "the forecast horizon, ranked highest first. Use this for "
-            "'which medicines will have the highest demand', 'top selling "
-            "medicines next month', or similar ranking questions."
+            "Get the medicines with the highest total predicted demand "
+            "over the forecast horizon."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "n": {"type": "integer", "description": "How many top medicines to return. Default 10."}
+                "n": {
+                    "type": "integer",
+                    "description": (
+                        "Number of medicines to return. "
+                        "Default is 10."
+                    ),
+                }
             },
         },
     },
     {
         "name": "get_demand_trend_medicines",
         "description": (
-            "Get medicines matching a specific trend direction (increasing, "
-            "decreasing, or stable demand), ranked by size of change. Use "
-            "this for 'which medicines are trending up/down' questions."
+            "Get medicines matching a demand trend direction such as "
+            "increasing, decreasing, stable, or flat."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "trend": {
                     "type": "string",
-                    "enum": ["increasing", "decreasing", "stable", "flat"],
-                    "description": "Which trend direction to filter for.",
+                    "enum": [
+                        "increasing",
+                        "decreasing",
+                        "stable",
+                        "flat",
+                    ],
+                    "description": (
+                        "Trend direction to filter by."
+                    ),
                 },
-                "n": {"type": "integer", "description": "How many medicines to return. Default 10."},
+                "n": {
+                    "type": "integer",
+                    "description": (
+                        "Number of medicines to return. "
+                        "Default is 10."
+                    ),
+                },
             },
-            "required": ["trend"],
+            "required": [
+                "trend"
+            ],
         },
     },
     {
         "name": "get_most_uncertain_medicines",
         "description": (
-            "Get the medicines whose forecasts have the WIDEST uncertainty "
-            "range (P10-P90 spread relative to the central forecast) -- "
-            "these are the forecasts to trust least and may need manual "
-            "review. Use this for 'which forecasts are least reliable' or "
-            "'which medicines have uncertain demand' questions."
+            "Get medicines whose forecasts have the highest relative "
+            "P10-P90 uncertainty spread."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "n": {"type": "integer", "description": "How many medicines to return. Default 10."}
+                "n": {
+                    "type": "integer",
+                    "description": (
+                        "Number of medicines to return. "
+                        "Default is 10."
+                    ),
+                }
             },
         },
     },
     {
         "name": "compare_medicines",
         "description": (
-            "Compare the forecasts of two or more specific medicines "
-            "side by side. Use this when the employee names multiple "
-            "medicine codes and asks to compare them."
+            "Compare forecasts for two or more specific medicines."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "medicine_ids": {
                     "type": "array",
-                    "items": {"type": "string"},
-                    "description": "The medicine codes to compare, e.g. ['0001', '0042'].",
+                    "items": {
+                        "type": "string"
+                    },
+                    "description": (
+                        "Medicine codes to compare."
+                    ),
                 }
             },
-            "required": ["medicine_ids"],
+            "required": [
+                "medicine_ids"
+            ],
         },
     },
 ]
- 
- 
+
+
+# ============================================================================
+# Forecast tools
+# ============================================================================
+
 class ForecastTools:
-    """Binds tool schemas to a live ForecastStore. One instance per app;
-    give it to Orchestrator."""
- 
-    def __init__(self, store: ForecastStore):
+    """
+    Binds LLM tool calls to a live ForecastStore.
+
+    All expected lookup and validation failures are converted into
+    JSON-serializable error responses instead of allowing exceptions
+    to escape into the orchestrator.
+    """
+
+    def __init__(
+        self,
+        store: ForecastStore,
+    ) -> None:
+
         self.store = store
- 
-    def execute(self, tool_name: str, tool_input: Dict[str, Any]) -> Dict[str, Any]:
-        """Dispatch a tool call by name. Returns a JSON-serializable dict —
-        callers (orchestrator) send this back to Claude as a tool_result."""
-        medicine_id = tool_input.get("medicine_id", "")
- 
+
+    def execute(
+        self,
+        tool_name: str,
+        tool_input: Dict[str, Any],
+    ) -> Dict[str, Any]:
+
+        medicine_id = str(
+            tool_input.get(
+                "medicine_id",
+                "",
+            )
+        ).strip()
+
         try:
+
+            # ==========================================================
+            # Full forecast
+            # ==========================================================
+
             if tool_name == "get_forecast":
-                result = self.store.get(medicine_id)
+
+                result = self.store.get(
+                    medicine_id
+                )
+
                 return {
-                    "medicine_id": result.medicine_id,
+                    "medicine_id": (
+                        result.medicine_id
+                    ),
                     "days": [
                         {
-                            "date": str(d.forecast_date),
-                            "predicted_demand": d.predicted_demand,
-                            "p10": d.quantiles.p10,
-                            "p90": d.quantiles.p90,
+                            "date": str(
+                                day.forecast_date
+                            ),
+                            "predicted_demand": (
+                                day.predicted_demand
+                            ),
+                            "p10": (
+                                day.quantiles.p10
+                            ),
+                            "p20": (
+                                day.quantiles.p20
+                            ),
+                            "p30": (
+                                day.quantiles.p30
+                            ),
+                            "p40": (
+                                day.quantiles.p40
+                            ),
+                            "p50": (
+                                day.quantiles.p50
+                            ),
+                            "p60": (
+                                day.quantiles.p60
+                            ),
+                            "p70": (
+                                day.quantiles.p70
+                            ),
+                            "p80": (
+                                day.quantiles.p80
+                            ),
+                            "p90": (
+                                day.quantiles.p90
+                            ),
                         }
-                        for d in result.days
+                        for day in result.days
                     ],
                 }
- 
-            elif tool_name == "get_trend":
-                result = self.store.get(medicine_id)
+
+            # ==========================================================
+            # Trend
+            # ==========================================================
+
+            if tool_name == "get_trend":
+
+                result = self.store.get(
+                    medicine_id
+                )
+
                 summary = result.to_summary()
+
                 return {
-                    "medicine_id": medicine_id,
-                    "trend": summary.trend,
-                    "trend_pct_change": summary.trend_pct_change,
+                    "medicine_id": (
+                        result.medicine_id
+                    ),
+                    "trend": (
+                        summary.trend
+                    ),
+                    "trend_pct_change": (
+                        summary.trend_pct_change
+                    ),
                 }
- 
-            elif tool_name == "get_summary":
-                result = self.store.get(medicine_id)
+
+            # ==========================================================
+            # Summary
+            # ==========================================================
+
+            if tool_name == "get_summary":
+
+                result = self.store.get(
+                    medicine_id
+                )
+
                 summary = result.to_summary()
-                return summary.model_dump(mode="json")
 
-            elif tool_name == "get_top_demand_medicines":
-                n = tool_input.get("n", 10)
-                summaries = self.store.get_top_demand(n=n)
-                return {"medicines": [s.model_dump(mode="json") for s in summaries]}
+                return summary.model_dump(
+                    mode="json"
+                )
 
-            elif tool_name == "get_demand_trend_medicines":
-                trend = tool_input.get("trend", "increasing")
-                n = tool_input.get("n", 10)
-                summaries = self.store.get_by_trend(trend, n=n)
-                return {"medicines": [s.model_dump(mode="json") for s in summaries]}
+            # ==========================================================
+            # Top demand
+            # ==========================================================
 
-            elif tool_name == "get_most_uncertain_medicines":
-                n = tool_input.get("n", 10)
-                return {"medicines": self.store.get_most_uncertain(n=n)}
+            if (
+                tool_name
+                == "get_top_demand_medicines"
+            ):
 
-            elif tool_name == "compare_medicines":
-                ids = tool_input.get("medicine_ids", [])
-                summaries = self.store.compare(ids)
-                return {"medicines": [s.model_dump(mode="json") for s in summaries]}
+                n = int(
+                    tool_input.get(
+                        "n",
+                        10,
+                    )
+                )
 
-            else:
-                return {"error": f"Unknown tool: {tool_name}"}
- 
-        except ForecastNotFoundError:
+                summaries = (
+                    self.store.get_top_demand(
+                        n=n
+                    )
+                )
+
+                return {
+                    "medicines": [
+                        summary.model_dump(
+                            mode="json"
+                        )
+                        for summary in summaries
+                    ]
+                }
+
+            # ==========================================================
+            # Trend filtering
+            # ==========================================================
+
+            if (
+                tool_name
+                == "get_demand_trend_medicines"
+            ):
+
+                trend = str(
+                    tool_input.get(
+                        "trend",
+                        "increasing",
+                    )
+                ).strip().lower()
+
+                n = int(
+                    tool_input.get(
+                        "n",
+                        10,
+                    )
+                )
+
+                summaries = (
+                    self.store.get_by_trend(
+                        trend,
+                        n=n,
+                    )
+                )
+
+                return {
+                    "medicines": [
+                        summary.model_dump(
+                            mode="json"
+                        )
+                        for summary in summaries
+                    ]
+                }
+
+            # ==========================================================
+            # Uncertainty
+            # ==========================================================
+
+            if (
+                tool_name
+                == "get_most_uncertain_medicines"
+            ):
+
+                n = int(
+                    tool_input.get(
+                        "n",
+                        10,
+                    )
+                )
+
+                medicines = (
+                    self.store.get_most_uncertain(
+                        n=n
+                    )
+                )
+
+                return {
+                    "medicines": medicines
+                }
+
+            # ==========================================================
+            # Comparison
+            # ==========================================================
+
+            if (
+                tool_name
+                == "compare_medicines"
+            ):
+
+                medicine_ids = (
+                    tool_input.get(
+                        "medicine_ids",
+                        [],
+                    )
+                )
+
+                if not isinstance(
+                    medicine_ids,
+                    list,
+                ):
+                    raise ValueError(
+                        "medicine_ids must be a list"
+                    )
+
+                medicine_ids = [
+                    str(
+                        medicine_id
+                    ).strip()
+                    for medicine_id
+                    in medicine_ids
+                    if str(
+                        medicine_id
+                    ).strip()
+                ]
+
+                if not medicine_ids:
+                    raise ValueError(
+                        "At least one medicine ID "
+                        "must be provided."
+                    )
+
+                summaries = (
+                    self.store.compare(
+                        medicine_ids
+                    )
+                )
+
+                return {
+                    "medicines": [
+                        summary.model_dump(
+                            mode="json"
+                        )
+                        for summary in summaries
+                    ]
+                }
+
+            # ==========================================================
+            # Unknown tool
+            # ==========================================================
+
             return {
                 "error": (
-                    f"No forecast available for medicine_id={medicine_id}. "
-                    f"It may be a new product with insufficient history, or "
-                    f"the ID may be wrong."
+                    f"Unknown tool: {tool_name}"
                 )
             }
- 
+
+        except ForecastNotFoundError:
+
+            return {
+                "error": (
+                    f"No forecast available for "
+                    f"medicine_id={medicine_id}. "
+                    "The medicine ID may be invalid, "
+                    "may not exist, or may not yet have "
+                    "sufficient forecasting history."
+                )
+            }
+
+        except ValueError as exc:
+
+            return {
+                "error": (
+                    "Invalid forecast tool input: "
+                    f"{str(exc)}"
+                )
+            }
+
+        except Exception as exc:
+
+            return {
+                "error": (
+                    "Forecast tool execution failed: "
+                    f"{type(exc).__name__}"
+                )
+            }

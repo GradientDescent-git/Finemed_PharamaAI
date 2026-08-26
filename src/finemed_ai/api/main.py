@@ -1,289 +1,796 @@
 from __future__ import annotations
- 
+
+import asyncio
+import hmac
 import logging
 import os
-from pathlib import Path
-from typing import Dict, List, Optional
- 
-from contextlib import asynccontextmanager
- 
+import re
 import shutil
-import zipfile
 import uuid
+import zipfile
+from collections import OrderedDict
+from contextlib import asynccontextmanager
+from pathlib import Path
+from typing import Any, Optional
 
-from fastapi import BackgroundTasks, Depends, FastAPI, File, Header, HTTPException, UploadFile
+from fastapi import (
+    BackgroundTasks,
+    Depends,
+    FastAPI,
+    File,
+    Header,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 from finemed_ai.automation.run_status import RunStatus
- 
-from finemed_ai.demand_forecasting.store import ForecastNotFoundError, ForecastStore
-from finemed_ai.llm.orchestrator import Orchestrator
-from finemed_ai.llm.tools import ForecastTools
- 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("finemed_api")
- 
-FORECAST_OUTPUT_DIR = Path(os.environ.get("FORECAST_OUTPUT_DIR", "data/05_forecasts"))
-ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN")
-# Import the SAME path constants the ETL/forecasting pipeline actually
-# uses -- NOT independently redefined env-var-configurable versions. Two
-# separate constants pointing at "the same" default path is exactly how
-# this endpoint and run_pipeline() ended up disagreeing about where raw
-# files live during testing. One source of truth, always in agreement.
 from finemed_ai.config.paths import RAW_DATA_DIR
 from finemed_ai.config.settings import Settings as _Settings
-SILVER_DEMAND_PATH = _Settings.DEMAND_FILE
+from finemed_ai.demand_forecasting.store import (
+    ForecastNotFoundError,
+    ForecastStore,
+)
+from finemed_ai.forecast_intelligence.conversation_orchestrator import (
+    ForecastConversationOrchestrator,
+)
 
-RUN_STATUS = RunStatus(Path(os.environ.get("RUN_STATUS_FILE", "data/run_status.json")))
 
-# Exact file set required per month -- matches
-# finemed_ai.validation.validation_config.REQUIRED_FILES. Kept as an
-# explicit constant here (not imported) so this endpoint validates the
-# upload BEFORE touching the database layer, which needs a working
-# Postgres connection just to import -- see the deferred-import note on
-# the endpoint below.
-REQUIRED_MONTHLY_FILES = [
-    "INVOICE.DAT", "INVDET.DAT", "MEDIMAST.DAT", "PURCHASE.DAT",
-    "COMPUR.DAT", "SUPMAST.DAT", "SFILE.DAT", "TFILE.DAT",
-]
+# ============================================================================
+# Logging
+# ============================================================================
 
-# Shared API key for staff/founder access. Simple by design: this is a
-# small team, not an enterprise needing per-user login -- a single shared
-# key checked on every client-facing request is the right amount of
-# security for this scale, without building a full auth system nobody
-# asked for. Upgrade to per-user auth later if the team grows or the
-# client wants individual access logs.
-CLIENT_API_KEY = os.environ.get("CLIENT_API_KEY")
- 
-_store: Optional[ForecastStore] = None
-_orchestrator: Optional[Orchestrator] = None
- 
- 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    global _store, _orchestrator
-    _store = ForecastStore(FORECAST_OUTPUT_DIR / "latest.parquet")
- 
-    try:
-        _orchestrator = Orchestrator(tools=ForecastTools(_store))
-    except Exception:
-        logger.exception(
-            "Failed to initialize Orchestrator (likely missing ANTHROPIC_API_KEY). "
-            "/chat will return 503 until this is fixed; /forecast and /health still work."
+logging.basicConfig(
+    level=logging.INFO,
+)
+
+logger = logging.getLogger(
+    "finemed_api"
+)
+
+
+# ============================================================================
+# Configuration
+# ============================================================================
+
+SETTINGS = _Settings()
+
+SILVER_DEMAND_PATH = SETTINGS.DEMAND_FILE
+FORECAST_OUTPUT_DIR = SETTINGS.FORECAST_DIR
+LATEST_FORECAST_FILE = SETTINGS.LATEST_FORECAST_FILE
+
+RUN_STATUS = RunStatus(
+    Path(
+        os.environ.get(
+            "RUN_STATUS_FILE",
+            "data/run_status.json",
         )
+    )
+)
+
+STATIC_DIR = (
+    Path(__file__).parent
+    / "static"
+)
+
+MAX_CONVERSATION_SESSIONS = int(
+    os.environ.get(
+        "MAX_CONVERSATION_SESSIONS",
+        "1000",
+    )
+)
+
+MAX_UPLOAD_BYTES = int(
+    os.environ.get(
+        "MAX_UPLOAD_BYTES",
+        str(500 * 1024 * 1024),
+    )
+)
+
+MAX_ZIP_UNCOMPRESSED_BYTES = int(
+    os.environ.get(
+        "MAX_ZIP_UNCOMPRESSED_BYTES",
+        str(2 * 1024 * 1024 * 1024),
+    )
+)
+
+MAX_ZIP_COMPRESSION_RATIO = float(
+    os.environ.get(
+        "MAX_ZIP_COMPRESSION_RATIO",
+        "100.0",
+    )
+)
+
+
+# ============================================================================
+# Required monthly source files
+# ============================================================================
+
+REQUIRED_MONTHLY_FILES = {
+    "INVOICE.DAT",
+    "INVDET.DAT",
+    "MEDIMAST.DAT",
+    "PURCHASE.DAT",
+    "COMPUR.DAT",
+    "SUPMAST.DAT",
+    "SFILE.DAT",
+    "TFILE.DAT",
+}
+
+
+# ============================================================================
+# Month validation
+# ============================================================================
+
+MONTH_PATTERN = re.compile(
+    r"^(?:\d{4}-\d{2}|\d{4}_\d{2}|\d{6})$"
+)
+
+
+# ============================================================================
+# Application state
+# ============================================================================
+
+_store: Optional[ForecastStore] = None
+
+_orchestrator: Optional[Any] = None
+
+_conversations: OrderedDict[
+    str,
+    ForecastConversationOrchestrator,
+] = OrderedDict()
+
+_conversation_lock = asyncio.Lock()
+
+_job_lock = asyncio.Lock()
+
+_pipeline_running = False
+
+
+# ============================================================================
+# Environment helpers
+# ============================================================================
+
+def get_admin_token() -> Optional[str]:
+    """
+    Resolve the admin token at request time.
+
+    Reading at request time avoids stale configuration in development
+    or test environments where environment variables may be changed
+    after application import.
+    """
+
+    value = os.environ.get(
+        "ADMIN_TOKEN"
+    )
+
+    if value is None:
+        return None
+
+    value = value.strip()
+
+    return value or None
+
+
+def get_client_api_key() -> Optional[str]:
+    """
+    Resolve the client API key at request time.
+    """
+
+    value = os.environ.get(
+        "CLIENT_API_KEY"
+    )
+
+    if value is None:
+        return None
+
+    value = value.strip()
+
+    return value or None
+
+
+# ============================================================================
+# Pipeline state helpers
+# ============================================================================
+
+async def acquire_pipeline_slot() -> None:
+    """
+    Atomically acquire the single pipeline execution slot.
+
+    Prevents overlapping manual forecast refreshes and monthly upload
+    pipelines.
+    """
+
+    global _pipeline_running
+
+    async with _job_lock:
+
+        if _pipeline_running:
+
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "A pipeline or forecast refresh "
+                    "is already running."
+                ),
+            )
+
+        _pipeline_running = True
+
+
+async def release_pipeline_slot() -> None:
+    """
+    Atomically release the pipeline execution slot.
+    """
+
+    global _pipeline_running
+
+    async with _job_lock:
+
+        _pipeline_running = False
+
+
+# ============================================================================
+# Lifespan
+# ============================================================================
+
+@asynccontextmanager
+async def lifespan(
+    app: FastAPI,
+):
+    global _store
+    global _orchestrator
+    global _pipeline_running
+
+    logger.info(
+        "Starting Finemed PharmaAI API"
+    )
+
+    # ------------------------------------------------------------------------
+    # Forecast store
+    # ------------------------------------------------------------------------
+
+    try:
+
+        _store = ForecastStore(
+            LATEST_FORECAST_FILE
+        )
+
+        logger.info(
+            (
+                "Forecast store initialized successfully "
+                "(medicines=%s)"
+            ),
+            len(
+                _store.list_medicine_ids()
+            ),
+        )
+
+    except Exception:
+
+        logger.exception(
+            "Failed to initialize ForecastStore"
+        )
+
+        _store = None
+
+    # ------------------------------------------------------------------------
+    # Forecast intelligence
+    # ------------------------------------------------------------------------
+
+    try:
+
+        _orchestrator = (
+            ForecastConversationOrchestrator()
+        )
+
+        logger.info(
+            "Forecast conversation intelligence initialized"
+        )
+
+    except Exception:
+
+        logger.exception(
+            (
+                "Failed to initialize forecast "
+                "conversation intelligence"
+            )
+        )
+
         _orchestrator = None
- 
-    yield  # app runs here
- 
-    logger.info("Shutting down FineMed API")
- 
- 
+
+    async with _job_lock:
+
+        _pipeline_running = False
+
+    yield
+
+    # ------------------------------------------------------------------------
+    # Shutdown
+    # ------------------------------------------------------------------------
+
+    async with _conversation_lock:
+
+        _conversations.clear()
+
+    _orchestrator = None
+    _store = None
+
+    async with _job_lock:
+
+        _pipeline_running = False
+
+    logger.info(
+        "Shutting down Finemed PharmaAI API"
+    )
+
+
+# ============================================================================
+# FastAPI application
+# ============================================================================
+
 app = FastAPI(
-    title="FineMed Pharma AI",
-    description="Demand forecasting + LLM Q&A over Chronos-2 forecasts.",
+    title="Finemed PharmaAI",
+    description=(
+        "Production demand forecasting intelligence platform "
+        "with deterministic forecast querying and conversational access."
+    ),
     version="1.0.0",
     lifespan=lifespan,
 )
- 
-# CORS_ALLOWED_ORIGINS: comma-separated list, e.g.
-# "https://finemed-dashboard.yourdomain.com,http://localhost:3000"
-# No wildcard here -- this serves real client business data, not a public demo.
-_cors_origins = os.environ.get("CORS_ALLOWED_ORIGINS", "").split(",")
-_cors_origins = [o.strip() for o in _cors_origins if o.strip()]
+
+
+# ============================================================================
+# CORS
+# ============================================================================
+
+_cors_origins = [
+    origin.strip()
+    for origin in os.environ.get(
+        "CORS_ALLOWED_ORIGINS",
+        "",
+    ).split(",")
+    if origin.strip()
+]
+
 if not _cors_origins:
+
     logger.warning(
-        "CORS_ALLOWED_ORIGINS not set -- no browser-based frontend origin is "
-        "allowed yet. Set this env var to your frontend's URL once it exists."
+        (
+            "CORS_ALLOWED_ORIGINS is not configured. "
+            "No external browser origins are allowed."
+        )
     )
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_credentials=False,
+    allow_methods=[
+        "GET",
+        "POST",
+    ],
+    allow_headers=[
+        "Content-Type",
+        "X-API-Key",
+        "X-Admin-Token",
+        "X-Conversation-ID",
+    ],
 )
 
-# Minimal staff/founder-facing frontend, served directly by this API --
-# no separate hosting, no build step, no teammate frontend dependency.
-# A fuller frontend can replace this later without touching any endpoint
-# below; the JS here only talks to /health, /chat, /forecast/*, same as
-# any other frontend would.
-_STATIC_DIR = Path(__file__).parent / "static"
-app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
+
+# ============================================================================
+# Static frontend
+# ============================================================================
+
+if STATIC_DIR.exists():
+
+    app.mount(
+        "/static",
+        StaticFiles(
+            directory=STATIC_DIR,
+        ),
+        name="static",
+    )
+
+else:
+
+    logger.warning(
+        "Static directory does not exist: %s",
+        STATIC_DIR,
+    )
 
 
-@app.get("/", include_in_schema=False)
-def root():
-    return FileResponse(_STATIC_DIR / "index.html")
- 
- 
+@app.get(
+    "/",
+    include_in_schema=False,
+)
+def root() -> FileResponse:
+    """
+    Serve the static frontend.
+    """
+
+    index_file = (
+        STATIC_DIR
+        / "index.html"
+    )
+
+    if not index_file.exists():
+
+        raise HTTPException(
+            status_code=404,
+            detail="Frontend is not available.",
+        )
+
+    return FileResponse(
+        index_file
+    )
+
+
+# ============================================================================
+# Dependencies
+# ============================================================================
+
 def get_store() -> ForecastStore:
+    """
+    Return the active forecast store.
+
+    Automatically reloads the store when the production artifact
+    has changed.
+    """
+
     if _store is None:
-        raise HTTPException(status_code=503, detail="Forecast store not initialized")
-    if _store.is_stale():
-        _store.reload()
-    return _store
- 
- 
-def get_orchestrator() -> Orchestrator:
-    if _orchestrator is None:
+
         raise HTTPException(
             status_code=503,
-            detail="Chat is unavailable — ANTHROPIC_API_KEY not configured on the server.",
+            detail=(
+                "Forecast store is not initialized."
+            ),
         )
+
+    try:
+
+        if _store.is_stale():
+
+            logger.info(
+                "Forecast store is stale. Reloading."
+            )
+
+            _store.reload()
+
+    except Exception:
+
+        logger.exception(
+            (
+                "Failed while checking or "
+                "reloading forecast store"
+            )
+        )
+
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Forecast data is temporarily unavailable."
+            ),
+        )
+
+    return _store
+
+
+def get_orchestrator() -> Any:
+    """
+    Return the application-level conversation orchestrator.
+    """
+
+    if _orchestrator is None:
+
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Forecast conversation service "
+                "is temporarily unavailable."
+            ),
+        )
+
     return _orchestrator
- 
- 
-def require_admin(x_admin_token: Optional[str] = Header(default=None)) -> None:
-    if not ADMIN_TOKEN:
-        raise HTTPException(status_code=503, detail="ADMIN_TOKEN not configured on server")
-    if x_admin_token != ADMIN_TOKEN:
-        raise HTTPException(status_code=401, detail="Invalid admin token")
 
 
-def require_client_auth(x_api_key: Optional[str] = Header(default=None)) -> None:
+def require_admin(
+    x_admin_token: Optional[str] = Header(
+        default=None,
+        alias="X-Admin-Token",
+    ),
+) -> None:
     """
-    Guards every staff/founder-facing endpoint (/chat, /forecast/*).
-    This is real client business data over the open internet now -- not a
-    public portfolio demo -- so every data-returning endpoint needs this,
-    not just /refresh.
+    Guard administrative endpoints.
     """
-    if not CLIENT_API_KEY:
-        raise HTTPException(status_code=503, detail="CLIENT_API_KEY not configured on server")
-    if x_api_key != CLIENT_API_KEY:
-        raise HTTPException(status_code=401, detail="Invalid or missing API key")
- 
- 
-# ---------------------------------------------------------------------------
+
+    admin_token = get_admin_token()
+
+    if not admin_token:
+
+        logger.error(
+            "ADMIN_TOKEN is not configured."
+        )
+
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Admin access is not configured."
+            ),
+        )
+
+    if (
+        not x_admin_token
+        or not hmac.compare_digest(
+            x_admin_token,
+            admin_token,
+        )
+    ):
+
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid admin token.",
+        )
+
+
+def require_client_auth(
+    x_api_key: Optional[str] = Header(
+        default=None,
+        alias="X-API-Key",
+    ),
+) -> None:
+    """
+    Guard staff-facing forecast and conversation endpoints.
+    """
+
+    client_api_key = get_client_api_key()
+
+    if not client_api_key:
+
+        logger.error(
+            "CLIENT_API_KEY is not configured."
+        )
+
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Client access is not configured."
+            ),
+        )
+
+    if (
+        not x_api_key
+        or not hmac.compare_digest(
+            x_api_key,
+            client_api_key,
+        )
+    ):
+
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or missing API key.",
+        )
+
+
+# ============================================================================
+# Conversation session management
+# ============================================================================
+
+async def get_conversation(
+    session_id: str,
+) -> ForecastConversationOrchestrator:
+    """
+    Return an isolated conversation orchestrator for one session.
+
+    This prevents context leaking between employees.
+
+    Sessions use bounded LRU-style eviction.
+    """
+
+    normalized_session_id = (
+        session_id.strip()
+    )
+
+    if not normalized_session_id:
+
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "session_id cannot be empty."
+            ),
+        )
+
+    if len(normalized_session_id) > 200:
+
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "session_id is too long."
+            ),
+        )
+
+    async with _conversation_lock:
+
+        existing = _conversations.get(
+            normalized_session_id
+        )
+
+        if existing is not None:
+
+            _conversations.move_to_end(
+                normalized_session_id
+            )
+
+            return existing
+
+        try:
+
+            conversation = (
+                ForecastConversationOrchestrator()
+            )
+
+        except Exception:
+
+            logger.exception(
+                (
+                    "Failed to initialize "
+                    "conversation session"
+                )
+            )
+
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Forecast conversation service "
+                    "is temporarily unavailable."
+                ),
+            )
+
+        _conversations[
+            normalized_session_id
+        ] = conversation
+
+        while (
+            len(_conversations)
+            > MAX_CONVERSATION_SESSIONS
+        ):
+
+            evicted_session_id, _ = (
+                _conversations.popitem(
+                    last=False
+                )
+            )
+
+            logger.info(
+                (
+                    "Evicted inactive conversation "
+                    "session: %s"
+                ),
+                evicted_session_id,
+            )
+
+        return conversation
+
+
+async def clear_conversation_sessions() -> None:
+    """
+    Clear session-specific context after forecast refresh.
+    """
+
+    async with _conversation_lock:
+
+        session_count = len(
+            _conversations
+        )
+
+        _conversations.clear()
+
+    logger.info(
+        (
+            "Cleared %d conversation sessions "
+            "after forecast refresh"
+        ),
+        session_count,
+    )
+
+
+# ============================================================================
 # Schemas
-# ---------------------------------------------------------------------------
- 
+# ============================================================================
+
 class ChatRequest(BaseModel):
-    question: str
-    conversation_history: Optional[List[Dict]] = None
- 
- 
+
+    question: str = Field(
+        ...,
+        min_length=1,
+        max_length=2000,
+    )
+
+    session_id: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        max_length=200,
+    )
+
+    @field_validator("question")
+    @classmethod
+    def validate_question(
+        cls,
+        value: str,
+    ) -> str:
+
+        cleaned = value.strip()
+
+        if not cleaned:
+
+            raise ValueError(
+                "question cannot be empty."
+            )
+
+        return cleaned
+
+    @field_validator("session_id")
+    @classmethod
+    def validate_session_id(
+        cls,
+        value: Optional[str],
+    ) -> Optional[str]:
+
+        if value is None:
+            return None
+
+        cleaned = value.strip()
+
+        if not cleaned:
+
+            raise ValueError(
+                "session_id cannot be empty."
+            )
+
+        return cleaned
+
+
 class ChatResponse(BaseModel):
+
     answer: str
- 
- 
+    action: str
+    confidence: float
+    source: str
+    resolved_medicine: Optional[str] = None
+    data: dict[str, Any]
+    session_id: str
+
+
+class HealthResponse(BaseModel):
+
+    status: str
+    forecast_store_loaded: bool
+    medicines_available: int
+    conversation_service_available: bool
+    chat_available: bool
+
+
 class RefreshResponse(BaseModel):
+
     status: str
     detail: str
- 
- 
-# ---------------------------------------------------------------------------
-# Endpoints
-# ---------------------------------------------------------------------------
- 
-@app.get("/health")
-def health():
-    store = _store
-    return {
-        "status": "ok",
-        "forecast_store_loaded": store is not None and not store._df.empty if store else False,
-        "medicines_available": len(store.list_medicine_ids()) if store else 0,
-        "chat_available": _orchestrator is not None,
-    }
- 
- 
-@app.get("/forecast/top", dependencies=[Depends(require_client_auth)])
-def get_top_demand(n: int = 10, store: ForecastStore = Depends(get_store)):
-    """Medicines with the highest total predicted demand, ranked."""
-    summaries = store.get_top_demand(n=n)
-    return {"medicines": [s.model_dump(mode="json") for s in summaries]}
 
-
-@app.get("/forecast/trend", dependencies=[Depends(require_client_auth)])
-def get_by_trend(direction: str, n: int = 10, store: ForecastStore = Depends(get_store)):
-    """Medicines matching a trend direction (increasing/decreasing/stable/flat)."""
-    valid = {"increasing", "decreasing", "stable", "flat"}
-    if direction not in valid:
-        raise HTTPException(status_code=400, detail=f"direction must be one of {sorted(valid)}")
-    summaries = store.get_by_trend(direction, n=n)
-    return {"medicines": [s.model_dump(mode="json") for s in summaries]}
-
-
-@app.get("/forecast/uncertain", dependencies=[Depends(require_client_auth)])
-def get_most_uncertain(n: int = 10, store: ForecastStore = Depends(get_store)):
-    """Medicines with the widest relative forecast uncertainty (P10-P90 spread)."""
-    return {"medicines": store.get_most_uncertain(n=n)}
-
-
-@app.get("/forecast/compare", dependencies=[Depends(require_client_auth)])
-def compare_medicines(ids: str, store: ForecastStore = Depends(get_store)):
-    """Compare specific medicines side by side. ids = comma-separated medicine codes, e.g. ?ids=0001,0042"""
-    medicine_ids = [i.strip() for i in ids.split(",") if i.strip()]
-    summaries = store.compare(medicine_ids)
-    return {"medicines": [s.model_dump(mode="json") for s in summaries]}
-
-
-@app.get("/forecast/{medicine_id}", dependencies=[Depends(require_client_auth)])
-def get_forecast(medicine_id: str, store: ForecastStore = Depends(get_store)):
-    try:
-        result = store.get(medicine_id)
-    except ForecastNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
-    return result.model_dump(mode="json")
- 
- 
-@app.get("/forecast/{medicine_id}/summary", dependencies=[Depends(require_client_auth)])
-def get_forecast_summary(medicine_id: str, store: ForecastStore = Depends(get_store)):
-    try:
-        result = store.get(medicine_id)
-    except ForecastNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
-    return result.to_summary().model_dump(mode="json")
- 
- 
-@app.post("/chat", response_model=ChatResponse, dependencies=[Depends(require_client_auth)])
-def chat(req: ChatRequest, orchestrator: Orchestrator = Depends(get_orchestrator)):
-    answer = orchestrator.ask(req.question, req.conversation_history)
-    return ChatResponse(answer=answer)
- 
- 
-@app.post("/refresh", response_model=RefreshResponse, dependencies=[Depends(require_admin)])
-def refresh(background_tasks: BackgroundTasks):
-    """
-    Kicks off a new monthly forecast batch run in the background.
- 
-    NOTE: this runs Chronos-2 inference for every medicine — it is heavy
-    and belongs on a worker with adequate CPU/RAM (or GPU), not the same
-    small instance serving /chat and /forecast. On a real deployment, point
-    this at a separate worker service or a queue (e.g. a Celery/RQ task) —
-    the synchronous background-task version here is fine for a portfolio
-    demo but will block your web dyno's other requests while it runs.
-    """
-    from finemed_ai.demand_forecasting.pipeline import run_monthly_forecast
- 
-    silver_path = SILVER_DEMAND_PATH
-    if not silver_path.exists():
-        raise HTTPException(status_code=400, detail=f"Silver demand source not found: {silver_path}")
- 
-    def _run():
-        manifest = run_monthly_forecast(silver_path, FORECAST_OUTPUT_DIR)
-        if _store:
-            _store.reload()
-        logger.info("Background refresh complete: run_id=%s", manifest.run_id)
- 
-    background_tasks.add_task(_run)
-    return RefreshResponse(status="accepted", detail="Forecast refresh started in background.")
- 
-
-# ---------------------------------------------------------------------------
-# Self-serve monthly upload
-# ---------------------------------------------------------------------------
 
 class UploadResponse(BaseModel):
+
     status: str
     run_id: str
     detail: str
 
 
 class PipelineStatusResponse(BaseModel):
+
     run_id: Optional[str] = None
     month: Optional[str] = None
     stage: Optional[str] = None
@@ -292,116 +799,1336 @@ class PipelineStatusResponse(BaseModel):
     error: Optional[str] = None
 
 
-def _run_full_monthly_chain(month: str) -> None:
+# ============================================================================
+# Health
+# ============================================================================
+
+@app.get(
+    "/health",
+    response_model=HealthResponse,
+)
+def health() -> HealthResponse:
     """
-    Runs ETL -> demand prep -> forecast, in order, updating RUN_STATUS at
-    each stage. Deferred imports (matching /refresh's existing pattern):
-    these modules touch the database at import time, so importing them at
-    the top of main.py would make the whole API fail to start if Postgres
-    isn't reachable. Importing here means only THIS background task fails,
-    not the entire server.
+    Return API health and dependency readiness information.
+
+    `status` represents API liveness. Dependency readiness is exposed
+    separately so a temporary forecast-data issue does not incorrectly
+    imply that the FastAPI application itself is down.
     """
-    try:
-        RUN_STATUS.update("etl")
-        from finemed_ai.pipeline.run_pipeline import run_pipeline
-        run_pipeline()
 
-        RUN_STATUS.update("demand_prep")
-        from finemed_ai.demand_forecasting.data_preparation import prepare_demand_data
-        prepare_demand_data()
+    store_loaded = False
+    medicine_count = 0
 
-        RUN_STATUS.update("forecasting")
-        from finemed_ai.demand_forecasting.pipeline import run_monthly_forecast
-        manifest = run_monthly_forecast(SILVER_DEMAND_PATH, FORECAST_OUTPUT_DIR)
+    if _store is not None:
 
-        if _store:
-            _store.reload()
+        try:
 
-        RUN_STATUS.update("done")
-        logger.info(
-            "Monthly chain complete for %s: %d/%d medicines forecasted (run_id=%s)",
-            month, manifest.medicines_succeeded, manifest.medicines_requested, manifest.run_id,
+            medicine_count = len(
+                _store.list_medicine_ids()
+            )
+
+            store_loaded = (
+                medicine_count > 0
+            )
+
+        except Exception:
+
+            logger.exception(
+                "Health check failed for ForecastStore"
+            )
+
+            store_loaded = False
+            medicine_count = 0
+
+    conversation_available = (
+        _orchestrator is not None
+    )
+
+    chat_available = (
+        conversation_available
+        and store_loaded
+    )
+
+    return HealthResponse(
+        status="ok",
+        forecast_store_loaded=store_loaded,
+        medicines_available=medicine_count,
+        conversation_service_available=(
+            conversation_available
+        ),
+        chat_available=chat_available,
+    )
+
+
+# ============================================================================
+# Forecast endpoints
+# ============================================================================
+
+@app.get(
+    "/forecast/top",
+    dependencies=[
+        Depends(require_client_auth),
+    ],
+)
+def get_top_demand(
+    n: int = Query(
+        default=10,
+        ge=1,
+        le=100,
+    ),
+    store: ForecastStore = Depends(
+        get_store
+    ),
+):
+
+    summaries = (
+        store.get_top_demand(
+            n=n
         )
-    except Exception as e:
-        logger.exception("Monthly chain failed for month=%s", month)
-        RUN_STATUS.fail(str(e))
+    )
 
+    return {
+        "medicines": [
+            summary.model_dump(
+                mode="json"
+            )
+            for summary in summaries
+        ]
+    }
+
+
+@app.get(
+    "/forecast/trend",
+    dependencies=[
+        Depends(require_client_auth),
+    ],
+)
+def get_by_trend(
+    direction: str = Query(
+        ...,
+        min_length=1,
+        max_length=50,
+    ),
+    n: int = Query(
+        default=10,
+        ge=1,
+        le=100,
+    ),
+    store: ForecastStore = Depends(
+        get_store
+    ),
+):
+
+    normalized_direction = (
+        direction.strip().lower()
+    )
+
+    valid_directions = {
+        "increasing",
+        "decreasing",
+        "stable",
+        "flat",
+    }
+
+    if (
+        normalized_direction
+        not in valid_directions
+    ):
+
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "direction must be one of "
+                f"{sorted(valid_directions)}"
+            ),
+        )
+
+    summaries = (
+        store.get_by_trend(
+            normalized_direction,
+            n=n,
+        )
+    )
+
+    return {
+        "medicines": [
+            summary.model_dump(
+                mode="json"
+            )
+            for summary in summaries
+        ]
+    }
+
+
+@app.get(
+    "/forecast/uncertain",
+    dependencies=[
+        Depends(require_client_auth),
+    ],
+)
+def get_most_uncertain(
+    n: int = Query(
+        default=10,
+        ge=1,
+        le=100,
+    ),
+    store: ForecastStore = Depends(
+        get_store
+    ),
+):
+
+    return {
+        "medicines": (
+            store.get_most_uncertain(
+                n=n
+            )
+        )
+    }
+
+
+@app.get(
+    "/forecast/compare",
+    dependencies=[
+        Depends(require_client_auth),
+    ],
+)
+def compare_medicines(
+    ids: str = Query(
+        ...,
+        min_length=1,
+    ),
+    store: ForecastStore = Depends(
+        get_store
+    ),
+):
+
+    medicine_ids = [
+        medicine_id.strip()
+        for medicine_id in ids.split(",")
+        if medicine_id.strip()
+    ]
+
+    if not medicine_ids:
+
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Provide at least one medicine ID."
+            ),
+        )
+
+    if len(medicine_ids) > 50:
+
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "A maximum of 50 medicines can be "
+                "compared in one request."
+            ),
+        )
+
+    summaries = store.compare(
+        medicine_ids
+    )
+
+    return {
+        "medicines": [
+            summary.model_dump(
+                mode="json"
+            )
+            for summary in summaries
+        ]
+    }
+
+
+# ============================================================================
+# Single forecast summary
+# ============================================================================
+
+@app.get(
+    "/forecast/{medicine_id}/summary",
+    dependencies=[
+        Depends(require_client_auth),
+    ],
+)
+def get_forecast_summary(
+    medicine_id: str,
+    store: ForecastStore = Depends(
+        get_store
+    ),
+):
+
+    try:
+
+        result = store.get(
+            medicine_id
+        )
+
+    except (
+        ForecastNotFoundError,
+        ValueError,
+    ) as exc:
+
+        raise HTTPException(
+            status_code=404,
+            detail=str(exc),
+        )
+
+    return (
+        result
+        .to_summary()
+        .model_dump(
+            mode="json"
+        )
+    )
+
+
+# ============================================================================
+# Single forecast
+# ============================================================================
+
+@app.get(
+    "/forecast/{medicine_id}",
+    dependencies=[
+        Depends(require_client_auth),
+    ],
+)
+def get_forecast(
+    medicine_id: str,
+    store: ForecastStore = Depends(
+        get_store
+    ),
+):
+
+    try:
+
+        result = store.get(
+            medicine_id
+        )
+
+    except (
+        ForecastNotFoundError,
+        ValueError,
+    ) as exc:
+
+        raise HTTPException(
+            status_code=404,
+            detail=str(exc),
+        )
+
+    return result.model_dump(
+        mode="json"
+    )
+
+
+# ============================================================================
+# Forecast intelligence conversation API
+# ============================================================================
+
+@app.post(
+    "/chat",
+    response_model=ChatResponse,
+    dependencies=[
+        Depends(require_client_auth),
+    ],
+)
+async def chat(
+    req: ChatRequest,
+    request: Request,
+    orchestrator: Any = Depends(
+        get_orchestrator
+    ),
+) -> ChatResponse:
+
+    session_id = req.session_id
+
+    if not session_id:
+
+        session_id = (
+            request.headers.get(
+                "X-Conversation-ID"
+            )
+            or uuid.uuid4().hex
+        )
+
+        session_id = session_id.strip()
+
+    if not session_id:
+
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "session_id cannot be empty."
+            ),
+        )
+
+    if len(session_id) > 200:
+
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "session_id is too long."
+            ),
+        )
+
+    try:
+
+        # --------------------------------------------------------------------
+        # Custom orchestrator / test double path
+        # --------------------------------------------------------------------
+
+        if not isinstance(
+            orchestrator,
+            ForecastConversationOrchestrator,
+        ):
+
+            try:
+
+                result = orchestrator.ask(
+                    req.question,
+                    None,
+                )
+
+            except TypeError:
+
+                result = orchestrator.ask(
+                    req.question
+                )
+
+        # --------------------------------------------------------------------
+        # Production session-isolated path
+        # --------------------------------------------------------------------
+
+        else:
+
+            conversation = (
+                await get_conversation(
+                    session_id
+                )
+            )
+
+            result = await asyncio.to_thread(
+                conversation.ask,
+                req.question,
+            )
+
+    except HTTPException:
+
+        raise
+
+    except Exception:
+
+        logger.exception(
+            (
+                "Conversation request failed "
+                "(session_id=%s)"
+            ),
+            session_id,
+        )
+
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Unable to process the forecasting question."
+            ),
+        )
+
+    # ------------------------------------------------------------------------
+    # Backward-compatible plain string result
+    # ------------------------------------------------------------------------
+
+    if isinstance(
+        result,
+        str,
+    ):
+
+        return ChatResponse(
+            answer=result,
+            action="conversation",
+            confidence=1.0,
+            source="orchestrator",
+            resolved_medicine=None,
+            data={},
+            session_id=session_id,
+        )
+
+    # ------------------------------------------------------------------------
+    # Structured deterministic result
+    # ------------------------------------------------------------------------
+
+    if not isinstance(
+        result,
+        dict,
+    ):
+
+        logger.error(
+            (
+                "Unexpected conversation result type: %s"
+            ),
+            type(result).__name__,
+        )
+
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Conversation service returned "
+                "an invalid response."
+            ),
+        )
+
+    try:
+
+        confidence = float(
+            result.get(
+                "confidence",
+                0.0,
+            )
+        )
+
+    except (
+        TypeError,
+        ValueError,
+    ):
+
+        confidence = 0.0
+
+    confidence = max(
+        0.0,
+        min(
+            1.0,
+            confidence,
+        ),
+    )
+
+    data = result.get(
+        "data",
+        {},
+    )
+
+    if not isinstance(
+        data,
+        dict,
+    ):
+
+        logger.warning(
+            "Conversation result contained non-dict data."
+        )
+
+        data = {}
+
+    return ChatResponse(
+        answer=str(
+            result.get(
+                "answer",
+                (
+                    "I don't have enough information "
+                    "to answer that reliably."
+                ),
+            )
+        ),
+        action=str(
+            result.get(
+                "action",
+                "insufficient_information",
+            )
+        ),
+        confidence=confidence,
+        source=str(
+            result.get(
+                "source",
+                "deterministic",
+            )
+        ),
+        resolved_medicine=result.get(
+            "resolved_medicine"
+        ),
+        data=data,
+        session_id=session_id,
+    )
+
+
+# ============================================================================
+# Forecast refresh
+# ============================================================================
+
+async def _run_refresh() -> None:
+    """
+    Execute a manual forecast refresh.
+
+    Flow:
+
+        Forecast generation
+            ->
+        Forecast store reload
+            ->
+        Conversation session invalidation
+    """
+
+    try:
+
+        logger.info(
+            "Starting manual forecast refresh"
+        )
+
+        from finemed_ai.demand_forecasting.pipeline import (
+            run_monthly_forecast,
+        )
+
+        manifest = await asyncio.to_thread(
+            run_monthly_forecast,
+            SILVER_DEMAND_PATH,
+            FORECAST_OUTPUT_DIR,
+        )
+
+        if manifest is None:
+
+            raise RuntimeError(
+                "Forecast refresh completed without "
+                "returning a manifest."
+            )
+
+        if _store is None:
+
+            raise RuntimeError(
+                "Forecast store is not initialized."
+            )
+
+        await asyncio.to_thread(
+            _store.reload
+        )
+
+        await clear_conversation_sessions()
+
+        logger.info(
+            (
+                "Forecast refresh completed successfully: "
+                "run_id=%s"
+            ),
+            getattr(
+                manifest,
+                "run_id",
+                "unknown",
+            ),
+        )
+
+    except Exception:
+
+        logger.exception(
+            "Forecast refresh failed"
+        )
+
+    finally:
+
+        await release_pipeline_slot()
+
+        logger.info(
+            "Manual forecast refresh lock released"
+        )
+
+
+@app.post(
+    "/refresh",
+    response_model=RefreshResponse,
+    dependencies=[
+        Depends(require_admin),
+    ],
+)
+async def refresh(
+    background_tasks: BackgroundTasks,
+):
+
+    if not SILVER_DEMAND_PATH.exists():
+
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Silver demand source not found: "
+                f"{SILVER_DEMAND_PATH}"
+            ),
+        )
+
+    await acquire_pipeline_slot()
+
+    try:
+
+        background_tasks.add_task(
+            _run_refresh
+        )
+
+    except Exception:
+
+        await release_pipeline_slot()
+
+        raise
+
+    return RefreshResponse(
+        status="accepted",
+        detail=(
+            "Forecast refresh started "
+            "in the background."
+        ),
+    )
+
+
+# ============================================================================
+# Safe monthly ZIP extraction
+# ============================================================================
+
+def _safe_extract_required_files(
+    zip_path: Path,
+    destination: Path,
+) -> None:
+    """
+    Extract only the required DAT files.
+
+    Security controls:
+
+    - No arbitrary archive extraction.
+    - Path traversal is impossible.
+    - Duplicate filenames are rejected.
+    - Only required files are written.
+    - Total uncompressed size is bounded.
+    - Suspicious compression ratios are rejected.
+    """
+
+    with zipfile.ZipFile(
+        zip_path
+    ) as archive:
+
+        archive_files = [
+            member
+            for member in archive.infolist()
+            if not member.is_dir()
+        ]
+
+        total_uncompressed_size = sum(
+            member.file_size
+            for member in archive_files
+        )
+
+        if (
+            total_uncompressed_size
+            > MAX_ZIP_UNCOMPRESSED_BYTES
+        ):
+
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "ZIP archive expands beyond "
+                    "the allowed size."
+                ),
+            )
+
+        normalized_names: dict[
+            str,
+            zipfile.ZipInfo,
+        ] = {}
+
+        for member in archive_files:
+
+            if member.file_size > 0:
+
+                compressed_size = max(
+                    member.compress_size,
+                    1,
+                )
+
+                compression_ratio = (
+                    member.file_size
+                    / compressed_size
+                )
+
+                if (
+                    compression_ratio
+                    > MAX_ZIP_COMPRESSION_RATIO
+                ):
+
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            "ZIP contains a suspiciously "
+                            "compressed file."
+                        ),
+                    )
+
+            filename = (
+                Path(
+                    member.filename
+                )
+                .name
+                .upper()
+            )
+
+            if not filename:
+
+                continue
+
+            if filename in normalized_names:
+
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "ZIP contains duplicate file: "
+                        f"{filename}"
+                    ),
+                )
+
+            normalized_names[
+                filename
+            ] = member
+
+        missing_files = (
+            REQUIRED_MONTHLY_FILES
+            - set(
+                normalized_names
+            )
+        )
+
+        if missing_files:
+
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "ZIP is missing required files: "
+                    f"{sorted(missing_files)}"
+                ),
+            )
+
+        destination.mkdir(
+            parents=True,
+            exist_ok=False,
+        )
+
+        try:
+
+            for filename in REQUIRED_MONTHLY_FILES:
+
+                member = (
+                    normalized_names[
+                        filename
+                    ]
+                )
+
+                output_path = (
+                    destination
+                    / filename
+                )
+
+                with (
+                    archive.open(
+                        member
+                    ) as source,
+                    output_path.open(
+                        "wb"
+                    ) as target,
+                ):
+
+                    shutil.copyfileobj(
+                        source,
+                        target,
+                    )
+
+        except Exception:
+
+            shutil.rmtree(
+                destination,
+                ignore_errors=True,
+            )
+
+            raise
+
+
+# ============================================================================
+# Monthly pipeline execution
+# ============================================================================
+
+async def _run_full_monthly_chain(
+    month: str,
+) -> None:
+
+    try:
+
+        RUN_STATUS.update(
+            "running"
+        )
+
+        logger.info(
+            (
+                "Starting monthly production pipeline "
+                "for month=%s"
+            ),
+            month,
+        )
+
+        from finemed_ai.automation.monthly_pipeline import (
+            MonthlyPipeline,
+        )
+
+        pipeline = MonthlyPipeline(
+            SETTINGS
+        )
+
+        result = await asyncio.to_thread(
+            pipeline.run
+        )
+
+        if not isinstance(
+            result,
+            dict,
+        ):
+
+            raise RuntimeError(
+                "Monthly pipeline returned an invalid result."
+            )
+
+        manifest = result.get(
+            "manifest"
+        )
+
+        evaluation = result.get(
+            "evaluation"
+        )
+
+        alerts = result.get(
+            "alerts"
+        )
+
+        # --------------------------------------------------------------------
+        # Publication gate
+        # --------------------------------------------------------------------
+
+        if manifest is None:
+
+            raise RuntimeError(
+                "Monthly pipeline completed without "
+                "returning a forecast manifest."
+            )
+
+        published = getattr(
+            manifest,
+            "published",
+            False,
+        )
+
+        if not published:
+
+            publish_note = getattr(
+                manifest,
+                "publish_note",
+                "Unknown publication failure.",
+            )
+
+            raise RuntimeError(
+                "Forecast publication failed: "
+                f"{publish_note}"
+            )
+
+        # --------------------------------------------------------------------
+        # Forecast store reload
+        # --------------------------------------------------------------------
+
+        RUN_STATUS.update(
+            "reloading"
+        )
+
+        if _store is None:
+
+            raise RuntimeError(
+                "Forecast store is not initialized."
+            )
+
+        await asyncio.to_thread(
+            _store.reload
+        )
+
+        # --------------------------------------------------------------------
+        # Clear stale conversation state
+        # --------------------------------------------------------------------
+
+        RUN_STATUS.update(
+            "refreshing_conversations"
+        )
+
+        await clear_conversation_sessions()
+
+        # --------------------------------------------------------------------
+        # Completion
+        # --------------------------------------------------------------------
+
+        RUN_STATUS.update(
+            "done"
+        )
+
+        logger.info(
+            (
+                "Monthly production pipeline complete "
+                "for month=%s | run_id=%s | "
+                "published=%s | successful=%s/%s | "
+                "failed=%s"
+            ),
+            month,
+            getattr(
+                manifest,
+                "run_id",
+                "unknown",
+            ),
+            published,
+            getattr(
+                manifest,
+                "medicines_succeeded",
+                "unknown",
+            ),
+            getattr(
+                manifest,
+                "medicines_requested",
+                "unknown",
+            ),
+            getattr(
+                manifest,
+                "medicines_failed",
+                "unknown",
+            ),
+        )
+
+        if evaluation is not None:
+
+            logger.info(
+                "Previous forecast evaluation available"
+            )
+
+        if alerts is not None:
+
+            logger.info(
+                "Operational alerts generated"
+            )
+
+    except Exception as exc:
+
+        logger.exception(
+            (
+                "Monthly production pipeline failed "
+                "for month=%s"
+            ),
+            month,
+        )
+
+        try:
+
+            RUN_STATUS.fail(
+                str(exc)
+            )
+
+        except Exception:
+
+            logger.exception(
+                "Failed to record pipeline failure status"
+            )
+
+    finally:
+
+        await release_pipeline_slot()
+
+        logger.info(
+            (
+                "Monthly production pipeline "
+                "lock released for month=%s"
+            ),
+            month,
+        )
+
+
+# ============================================================================
+# Monthly upload
+# ============================================================================
 
 @app.post(
     "/admin/upload-monthly-data",
     response_model=UploadResponse,
-    dependencies=[Depends(require_admin)],
+    dependencies=[
+        Depends(require_admin),
+    ],
 )
-def upload_monthly_data(
+async def upload_monthly_data(
     background_tasks: BackgroundTasks,
-    month: str,
-    file: UploadFile = File(...),
+    month: str = Query(
+        ...,
+        min_length=1,
+        max_length=100,
+    ),
+    file: UploadFile = File(
+        ...,
+    ),
 ):
-    """
-    Founder/admin uploads a ZIP containing this month's 8 required .DAT
-    files. We validate the ZIP contains exactly what's needed BEFORE
-    kicking off the (multi-minute) pipeline, so a bad upload fails in
-    seconds with a clear message instead of after running for a while.
 
-    `month` should match your raw-data folder naming convention (e.g.
-    "2026-08" or whatever your existing data/01_raw/<folder> names use --
-    check an existing folder name if unsure).
-    """
-    if not file.filename.lower().endswith(".zip"):
-        raise HTTPException(status_code=400, detail="Please upload a single .zip file containing the 8 .DAT files.")
+    normalized_month = (
+        month.strip()
+    )
 
-    month_dir = RAW_DATA_DIR / month
-    if month_dir.exists():
+    if not normalized_month:
+
         raise HTTPException(
-            status_code=409,
-            detail=f"Month '{month}' already exists at {month_dir}. "
-                    f"Delete it first if you're intentionally re-uploading.",
+            status_code=400,
+            detail=(
+                "Month identifier cannot be empty."
+            ),
         )
 
-    tmp_zip_path = RAW_DATA_DIR / f"_upload_{uuid.uuid4().hex[:8]}.zip"
-    tmp_zip_path.parent.mkdir(parents=True, exist_ok=True)
+    if (
+        Path(
+            normalized_month
+        ).name
+        != normalized_month
+    ):
+
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Invalid month identifier."
+            ),
+        )
+
+    if not MONTH_PATTERN.fullmatch(
+        normalized_month
+    ):
+
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Invalid month format. "
+                "Use YYYY-MM, YYYY_MM, or YYYYMM."
+            ),
+        )
+
+    filename = (
+        file.filename
+        or ""
+    ).lower()
+
+    if not filename.endswith(
+        ".zip"
+    ):
+
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Please upload a .zip file containing "
+                "the required DAT files."
+            ),
+        )
+
+    await acquire_pipeline_slot()
+
+    month_dir = (
+        RAW_DATA_DIR
+        / normalized_month
+    )
+
+    temporary_zip_path: Optional[
+        Path
+    ] = None
 
     try:
-        with tmp_zip_path.open("wb") as out:
-            shutil.copyfileobj(file.file, out)
 
-        with zipfile.ZipFile(tmp_zip_path) as zf:
-            names_in_zip = {Path(n).name for n in zf.namelist() if not n.endswith("/")}
-            missing = set(REQUIRED_MONTHLY_FILES) - names_in_zip
-            if missing:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"ZIP is missing required files: {sorted(missing)}",
+        if month_dir.exists():
+
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Month '{normalized_month}' already exists. "
+                    "Remove it before intentionally re-uploading."
+                ),
+            )
+
+        RAW_DATA_DIR.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        temporary_zip_path = (
+            RAW_DATA_DIR
+            / (
+                f"_upload_"
+                f"{uuid.uuid4().hex}.zip"
+            )
+        )
+
+        bytes_written = 0
+
+        with temporary_zip_path.open(
+            "wb"
+        ) as output:
+
+            while True:
+
+                chunk = await file.read(
+                    1024 * 1024
                 )
 
-            month_dir.mkdir(parents=True, exist_ok=True)
-            for required_name in REQUIRED_MONTHLY_FILES:
-                matching = [n for n in zf.namelist() if Path(n).name == required_name]
-                with zf.open(matching[0]) as src, (month_dir / required_name).open("wb") as dst:
-                    shutil.copyfileobj(src, dst)
+                if not chunk:
+                    break
+
+                bytes_written += len(
+                    chunk
+                )
+
+                if (
+                    bytes_written
+                    > MAX_UPLOAD_BYTES
+                ):
+
+                    raise HTTPException(
+                        status_code=413,
+                        detail=(
+                            "Uploaded file exceeds "
+                            "the maximum allowed size."
+                        ),
+                    )
+
+                output.write(
+                    chunk
+                )
+
+        _safe_extract_required_files(
+            temporary_zip_path,
+            month_dir,
+        )
+
+    except HTTPException:
+
+        if month_dir.exists():
+
+            shutil.rmtree(
+                month_dir,
+                ignore_errors=True,
+            )
+
+        await release_pipeline_slot()
+
+        raise
+
+    except zipfile.BadZipFile:
+
+        if month_dir.exists():
+
+            shutil.rmtree(
+                month_dir,
+                ignore_errors=True,
+            )
+
+        await release_pipeline_slot()
+
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Uploaded file is not a valid ZIP archive."
+            ),
+        )
+
+    except Exception:
+
+        if month_dir.exists():
+
+            shutil.rmtree(
+                month_dir,
+                ignore_errors=True,
+            )
+
+        logger.exception(
+            "Failed to process monthly upload"
+        )
+
+        await release_pipeline_slot()
+
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Unable to process the uploaded file."
+            ),
+        )
 
     finally:
-        tmp_zip_path.unlink(missing_ok=True)
 
-    run_id = uuid.uuid4().hex[:12]
-    RUN_STATUS.start(run_id, month)
-    background_tasks.add_task(_run_full_monthly_chain, month)
+        if temporary_zip_path is not None:
+
+            temporary_zip_path.unlink(
+                missing_ok=True
+            )
+
+        await file.close()
+
+    run_id = (
+        uuid.uuid4()
+        .hex[:12]
+    )
+
+    try:
+
+        RUN_STATUS.start(
+            run_id,
+            normalized_month,
+        )
+
+    except Exception:
+
+        logger.exception(
+            "Failed to initialize pipeline run status"
+        )
+
+        await release_pipeline_slot()
+
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Unable to initialize pipeline status."
+            ),
+        )
+
+    try:
+
+        background_tasks.add_task(
+            _run_full_monthly_chain,
+            normalized_month,
+        )
+
+    except Exception:
+
+        await release_pipeline_slot()
+
+        raise
 
     return UploadResponse(
         status="accepted",
         run_id=run_id,
-        detail=f"Files received for {month}. Processing started in the background -- "
-               f"check /admin/pipeline-status for progress (this can take several minutes).",
+        detail=(
+            f"Files received for {normalized_month}. "
+            "Processing started in the background. "
+            "Check /admin/pipeline-status for progress."
+        ),
     )
 
+
+# ============================================================================
+# Pipeline status
+# ============================================================================
 
 @app.get(
     "/admin/pipeline-status",
     response_model=PipelineStatusResponse,
-    dependencies=[Depends(require_admin)],
+    dependencies=[
+        Depends(require_admin),
+    ],
 )
-def pipeline_status():
+def pipeline_status() -> PipelineStatusResponse:
+    """
+    Return the latest monthly pipeline execution status.
+    """
+
     data = RUN_STATUS.read()
+
     if data is None:
+
         return PipelineStatusResponse()
-    return PipelineStatusResponse(**data)
+
+    return PipelineStatusResponse(
+        **data
+    )

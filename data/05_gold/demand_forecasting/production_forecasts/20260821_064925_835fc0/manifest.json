@@ -1,0 +1,12 @@
+{
+  "run_id": "20260821_064925_835fc0",
+  "started_at": "2026-08-21T06:49:25.761041Z",
+  "completed_at": "2026-08-21T06:49:46.009253Z",
+  "medicines_requested": 158,
+  "medicines_succeeded": 158,
+  "medicines_failed": 0,
+  "failed_medicine_ids": [],
+  "output_path": "E:\\Finemed_PharmaAI\\data\\05_gold\\demand_forecasting\\production_forecasts\\20260821_064925_835fc0\\forecast.parquet",
+  "published": true,
+  "publish_note": "Published successfully: 158/158 medicines succeeded (100.0%)."
+}

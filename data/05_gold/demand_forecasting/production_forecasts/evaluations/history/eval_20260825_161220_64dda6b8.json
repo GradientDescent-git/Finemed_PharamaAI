@@ -1,0 +1,13 @@
+{
+  "evaluation_id": "eval_20260825_161220_64dda6b8",
+  "evaluated_at": "2026-08-25T16:12:20.890278+00:00",
+  "total_medicines_evaluated": 0,
+  "total_actual_units": 0.0,
+  "total_predicted_units": 0.0,
+  "overall_wape_pct": 0.0,
+  "overall_mae": 0.0,
+  "overall_smape_pct": 0.0,
+  "overall_mbe": 0.0,
+  "overall_coverage_pct": 0.0,
+  "medicines": []
+}

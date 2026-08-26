@@ -1,0 +1,24 @@
+{
+  "run_id": "20260821_095402_b70c2a",
+  "started_at": "2026-08-21T09:54:02.370026Z",
+  "completed_at": "2026-08-21T09:54:21.435377Z",
+  "medicines_requested": 91,
+  "medicines_succeeded": 80,
+  "medicines_failed": 11,
+  "failed_medicine_ids": [
+    "0036",
+    "0062",
+    "0063",
+    "0083",
+    "0084",
+    "0094",
+    "0095",
+    "0097",
+    "0112",
+    "0139",
+    "0143"
+  ],
+  "output_path": "data\\05_gold\\demand_forecasting\\production_forecasts\\20260821_095402_b70c2a\\forecast.parquet",
+  "published": false,
+  "publish_note": "NOT published: success rate 87.9% below required 100%; output validation failed: Forecast output missing medicines: ['0036', '0062', '0063', '0083', '0084', '0094', '0095', '0097', '0112', '0139', '0143']. The previous latest.parquet was retained."
+}

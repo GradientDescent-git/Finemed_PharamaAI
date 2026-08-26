@@ -25,22 +25,20 @@ logger = logging.getLogger(__name__)
 
 
 # ============================================================================
-# Constants
+# CONSTANTS
 # ============================================================================
 
 MEDICINE_ID_COLUMN = "Medicine_ID"
 TIMESTAMP_COLUMN = "timestamp"
 TARGET_COLUMN = "target"
 
+SELECTED_MODEL_COLUMN = "Selected_Model"
+ROUTING_RULE_COLUMN = "Routing_Rule"
+ROUTING_REASON_COLUMN = "Routing_Reason"
+VALIDATION_ADVANTAGE_COLUMN = "Validation_Advantage_Pct"
+
 MODEL_CHRONOS = "chronos-2-P50"
 MODEL_TSB = "tsb"
-
-ROUTING_THRESHOLD_PCT = 30.0
-
-REQUIRED_ROUTING_COLUMNS = {
-    MEDICINE_ID_COLUMN,
-    "Validation_Advantage_Pct",
-}
 
 REQUIRED_HISTORY_COLUMNS = {
     MEDICINE_ID_COLUMN,
@@ -48,9 +46,32 @@ REQUIRED_HISTORY_COLUMNS = {
     TARGET_COLUMN,
 }
 
+REQUIRED_ROUTING_COLUMNS = {
+    MEDICINE_ID_COLUMN,
+    SELECTED_MODEL_COLUMN,
+    ROUTING_RULE_COLUMN,
+    ROUTING_REASON_COLUMN,
+    VALIDATION_ADVANTAGE_COLUMN,
+}
+
+OUTPUT_COLUMNS = [
+    MEDICINE_ID_COLUMN,
+    "Forecast_Date",
+    SELECTED_MODEL_COLUMN,
+    "Predicted_Demand",
+    "P10",
+    "P50",
+    "P90",
+    VALIDATION_ADVANTAGE_COLUMN,
+    ROUTING_REASON_COLUMN,
+    "Context_Length_Used",
+    "Prediction_Length",
+    "Generated_At",
+]
+
 
 # ============================================================================
-# Result schema
+# RESULT SCHEMA
 # ============================================================================
 
 @dataclass
@@ -60,15 +81,21 @@ class ProductionForecastResult:
 
     Chronos-selected medicines contain P10/P50/P90.
 
-    TSB-selected medicines do not have probabilistic quantiles, so
-    p10/p50/p90 remain None.
+    For Chronos-2-P50:
+
+        predicted_demand == p50
+
+    TSB-selected medicines do not expose probabilistic quantiles.
+
+    validation_advantage_pct is NaN when the routing table explicitly
+    contains a non-validation fallback medicine.
     """
 
     medicine_id: str
 
     selected_model: str
 
-    routing_advantage_pct: float
+    validation_advantage_pct: float
     routing_reason: str
 
     forecast_dates: List[pd.Timestamp]
@@ -85,7 +112,7 @@ class ProductionForecastResult:
 
 
 # ============================================================================
-# TSB
+# TSB FORECAST
 # ============================================================================
 
 def tsb_forecast(
@@ -97,13 +124,18 @@ def tsb_forecast(
     """
     Teunter-Syntetos-Babai forecast.
 
-    This matches the validated TSB formulation used during
-    model comparison/backtesting.
+    This implementation must remain aligned with the validated TSB
+    formulation used during model comparison and production routing.
     """
+
+    if not isinstance(history, pd.Series):
+        raise TypeError(
+            "history must be a pandas Series."
+        )
 
     if horizon <= 0:
         raise ValueError(
-            f"horizon must be positive, got {horizon}"
+            f"horizon must be positive, got {horizon}."
         )
 
     if not 0.0 < alpha_demand <= 1.0:
@@ -116,33 +148,45 @@ def tsb_forecast(
             "alpha_probability must be in (0, 1]."
         )
 
-    if not isinstance(history, pd.Series):
-        raise TypeError(
-            "history must be a pandas Series."
-        )
-
-    y = history.to_numpy(dtype=float)
+    y = history.to_numpy(
+        dtype=float
+    )
 
     if len(y) == 0:
-        return np.zeros(horizon, dtype=float)
+        return np.zeros(
+            horizon,
+            dtype=float,
+        )
 
     if not np.isfinite(y).all():
         raise ValueError(
             "TSB history contains non-finite values."
         )
 
-    y = np.maximum(y, 0.0)
+    y = np.maximum(y,0.0)
 
-    non_zero = np.flatnonzero(y > 0)
+    non_zero = np.flatnonzero(
+        y > 0
+    )
 
     if len(non_zero) == 0:
-        return np.zeros(horizon, dtype=float)
+        return np.zeros(
+            horizon,
+            dtype=float,
+        )
 
-    first = int(non_zero[0])
+    first_non_zero = int(
+        non_zero[0]
+    )
 
-    demand_estimate = float(y[first])
+    demand_estimate = float(
+        y[first_non_zero]
+    )
 
-    probability = 1.0 / float(first + 1)
+    probability = (
+        1.0
+        / float(first_non_zero + 1)
+    )
 
     for demand in y:
 
@@ -154,7 +198,10 @@ def tsb_forecast(
 
         probability += (
             alpha_probability
-            * (occurrence - probability)
+            * (
+                occurrence
+                - probability
+            )
         )
 
         if occurrence > 0:
@@ -177,7 +224,9 @@ def tsb_forecast(
         0.0,
     )
 
-    if not np.isfinite(forecast_value):
+    if not np.isfinite(
+        forecast_value
+    ):
         raise ValueError(
             "TSB produced a non-finite forecast."
         )
@@ -190,24 +239,49 @@ def tsb_forecast(
 
 
 # ============================================================================
-# Production service
+# PRODUCTION FORECAST SERVICE
 # ============================================================================
 
 class ProductionForecastService:
     """
-    Production forecasting orchestration layer.
+    Production demand forecasting orchestration layer.
 
     Responsibilities:
 
     1. Validate source history.
-    2. Validate routing policy.
-    3. Normalize transaction history into a daily calendar.
-    4. Apply frozen model routing.
+    2. Validate production routing table.
+    3. Build continuous daily medicine history.
+    4. Preserve the frozen routing decision.
     5. Execute Chronos-2 P50.
     6. Execute TSB.
-    7. Normalize results into one production schema.
+    7. Enforce production forecast invariants.
     8. Isolate medicine-level failures.
-    9. Validate final production output.
+    9. Return one normalized production output schema.
+
+    IMPORTANT ARCHITECTURAL RULE
+    ----------------------------
+
+    The production routing table is the source of truth.
+
+    For an existing routing record, this service MUST NOT recompute:
+
+        - Selected_Model
+        - Routing_Rule
+        - Routing_Reason
+        - Validation_Advantage_Pct
+
+    This is essential because some medicines legitimately have:
+
+        Validation_Advantage_Pct = NaN
+
+    while still having an explicit routing decision such as:
+
+        Selected_Model = "tsb"
+        Routing_Rule = "fallback_to_tsb_when_no_validation_record"
+        Routing_Reason = "not_in_validation_population"
+
+    Missing routing records are the only case where this service creates
+    its own fallback provenance.
     """
 
     def __init__(
@@ -215,7 +289,8 @@ class ProductionForecastService:
         router: ProductionForecastRouter,
         forecast_config: ForecastConfig = DEFAULT_CONFIG,
         predictor: Optional[PredictorService] = None,
-    ):
+    ) -> None:
+
         if router is None:
             raise ValueError(
                 "router must not be None."
@@ -238,7 +313,7 @@ class ProductionForecastService:
         )
 
     # ========================================================================
-    # Input validation
+    # INPUT VALIDATION
     # ========================================================================
 
     @staticmethod
@@ -246,9 +321,17 @@ class ProductionForecastService:
         history_df: pd.DataFrame,
     ) -> None:
 
-        if not isinstance(history_df, pd.DataFrame):
+        if not isinstance(
+            history_df,
+            pd.DataFrame,
+        ):
             raise TypeError(
                 "history_df must be a pandas DataFrame."
+            )
+
+        if history_df.empty:
+            raise ValueError(
+                "History dataframe is empty."
             )
 
         missing = (
@@ -262,57 +345,72 @@ class ProductionForecastService:
                 f"{sorted(missing)}"
             )
 
-        if history_df.empty:
-            raise ValueError(
-                "History dataframe is empty."
-            )
+        if history_df[
+            MEDICINE_ID_COLUMN
+        ].isna().any():
 
-        if history_df[MEDICINE_ID_COLUMN].isna().any():
             raise ValueError(
                 "History contains null Medicine_ID values."
             )
 
         medicine_ids = (
-            history_df[MEDICINE_ID_COLUMN]
+            history_df[
+                MEDICINE_ID_COLUMN
+            ]
             .astype(str)
             .str.strip()
         )
 
-        if medicine_ids.eq("").any():
+        if medicine_ids.eq(
+            ""
+        ).any():
+
             raise ValueError(
                 "History contains empty Medicine_ID values."
             )
 
-        parsed_timestamps = pd.to_datetime(
-            history_df[TIMESTAMP_COLUMN],
+        timestamps = pd.to_datetime(
+            history_df[
+                TIMESTAMP_COLUMN
+            ],
             errors="coerce",
         )
 
-        if parsed_timestamps.isna().any():
+        if timestamps.isna().any():
+
             raise ValueError(
                 f"{TIMESTAMP_COLUMN} contains invalid timestamps."
             )
 
-        target_values = pd.to_numeric(
-            history_df[TARGET_COLUMN],
+        target = pd.to_numeric(
+            history_df[
+                TARGET_COLUMN
+            ],
             errors="coerce",
         )
 
-        if target_values.isna().any():
+        if target.isna().any():
+
             raise ValueError(
                 f"{TARGET_COLUMN} contains non-numeric values."
             )
 
-        target_array = target_values.to_numpy(
+        target_array = target.to_numpy(
             dtype=float
         )
 
-        if not np.isfinite(target_array).all():
+        if not np.isfinite(
+            target_array
+        ).all():
+
             raise ValueError(
                 f"{TARGET_COLUMN} contains non-finite values."
             )
 
-        if (target_values < 0).any():
+        if (
+            target < 0
+        ).any():
+
             raise ValueError(
                 f"{TARGET_COLUMN} contains negative demand."
             )
@@ -330,6 +428,11 @@ class ProductionForecastService:
                 "routing_table must be a pandas DataFrame."
             )
 
+        if routing_table.empty:
+            raise ValueError(
+                "Routing table is empty."
+            )
+
         missing = (
             REQUIRED_ROUTING_COLUMNS
             - set(routing_table.columns)
@@ -341,70 +444,160 @@ class ProductionForecastService:
                 f"{sorted(missing)}"
             )
 
-        if routing_table.empty:
-            raise ValueError(
-                "Routing table is empty."
-            )
+        if routing_table[
+            MEDICINE_ID_COLUMN
+        ].isna().any():
 
-        if routing_table[MEDICINE_ID_COLUMN].isna().any():
             raise ValueError(
                 "Routing table contains null Medicine_ID values."
             )
 
         medicine_ids = (
-            routing_table[MEDICINE_ID_COLUMN]
+            routing_table[
+                MEDICINE_ID_COLUMN
+            ]
             .astype(str)
             .str.strip()
         )
 
-        if medicine_ids.eq("").any():
+        if medicine_ids.eq(
+            ""
+        ).any():
+
             raise ValueError(
                 "Routing table contains empty Medicine_ID values."
             )
 
-        duplicate_ids = medicine_ids.duplicated()
+        duplicate_mask = medicine_ids.duplicated(
+            keep=False
+        )
 
-        if duplicate_ids.any():
+        if duplicate_mask.any():
 
-            duplicated = (
+            duplicates = (
                 medicine_ids[
-                    duplicate_ids
+                    duplicate_mask
                 ]
+                .unique()
                 .tolist()
             )
 
             raise ValueError(
                 "Routing table contains duplicate Medicine_ID values: "
-                f"{duplicated}"
+                f"{duplicates}"
+            )
+
+        selected_models = (
+            routing_table[
+                SELECTED_MODEL_COLUMN
+            ]
+            .astype(str)
+            .str.strip()
+        )
+
+        invalid_models = (
+            set(
+                selected_models.unique()
+            )
+            - {
+                MODEL_CHRONOS,
+                MODEL_TSB,
+            }
+        )
+
+        if invalid_models:
+
+            raise ValueError(
+                "Routing table contains unsupported Selected_Model values: "
+                f"{sorted(invalid_models)}"
+            )
+
+        routing_rules = (
+            routing_table[
+                ROUTING_RULE_COLUMN
+            ]
+            .astype(str)
+            .str.strip()
+        )
+
+        if routing_rules.eq(
+            ""
+        ).any():
+
+            raise ValueError(
+                "Routing table contains empty Routing_Rule values."
+            )
+
+        routing_reasons = (
+            routing_table[
+                ROUTING_REASON_COLUMN
+            ]
+            .astype(str)
+            .str.strip()
+        )
+
+        if routing_reasons.eq(
+            ""
+        ).any():
+
+            raise ValueError(
+                "Routing table contains empty Routing_Reason values."
             )
 
         advantages = pd.to_numeric(
             routing_table[
-                "Validation_Advantage_Pct"
+                VALIDATION_ADVANTAGE_COLUMN
             ],
             errors="coerce",
         )
 
-        finite_advantages = advantages.dropna()
+        finite_advantages = (
+            advantages.dropna()
+        )
 
-        if not np.isfinite(
-            finite_advantages.to_numpy(
-                dtype=float
-            )
-        ).all():
+        if (
+            not finite_advantages.empty
+            and not np.isfinite(
+                finite_advantages.to_numpy(
+                    dtype=float
+                )
+            ).all()
+        ):
+
             raise ValueError(
                 "Routing table contains non-finite "
-                "Validation_Advantage_Pct values."
+                f"{VALIDATION_ADVANTAGE_COLUMN} values."
             )
 
+        chronos_mask = (
+            selected_models
+            == MODEL_CHRONOS
+        )
+
+        if chronos_mask.any():
+
+            chronos_advantages = (
+                advantages[
+                    chronos_mask
+                ]
+            )
+
+            if chronos_advantages.isna().any():
+
+                raise ValueError(
+                    "Chronos routing records must contain a finite "
+                    f"{VALIDATION_ADVANTAGE_COLUMN}."
+                )
+
     # ========================================================================
-    # Daily history normalization
+    # DAILY HISTORY NORMALIZATION
     # ========================================================================
 
     @staticmethod
     def _prepare_daily_history(
         medicine_id: str,
         history_df: pd.DataFrame,
+        forecast_origin: Optional[pd.Timestamp] = None,
     ) -> pd.DataFrame:
 
         medicine_id = str(
@@ -417,40 +610,65 @@ class ProductionForecastService:
             )
 
         normalized_ids = (
-            history_df[MEDICINE_ID_COLUMN]
+            history_df[
+                MEDICINE_ID_COLUMN
+            ]
             .astype(str)
             .str.strip()
         )
 
-        history = history_df[
-            normalized_ids == medicine_id
-        ].copy()
+        history = (
+            history_df[
+                normalized_ids
+                == medicine_id
+            ]
+            .copy()
+        )
 
         if history.empty:
+
             raise InsufficientHistoryError(
-                f"No history for item_id={medicine_id}"
+                f"No history for medicine_id={medicine_id}"
             )
 
-        history[TIMESTAMP_COLUMN] = pd.to_datetime(
-            history[TIMESTAMP_COLUMN],
-            errors="raise",
-        )
-
-        history[TARGET_COLUMN] = pd.to_numeric(
-            history[TARGET_COLUMN],
-            errors="raise",
-        )
-
-        history[MEDICINE_ID_COLUMN] = (
-            history[MEDICINE_ID_COLUMN]
+        history[
+            MEDICINE_ID_COLUMN
+        ] = (
+            history[
+                MEDICINE_ID_COLUMN
+            ]
             .astype(str)
             .str.strip()
         )
 
-        history[TIMESTAMP_COLUMN] = (
-            history[TIMESTAMP_COLUMN]
-            .dt.normalize()
+        history[
+            TIMESTAMP_COLUMN
+        ] = pd.to_datetime(
+            history[
+                TIMESTAMP_COLUMN
+            ],
+            errors="raise",
+        ).dt.normalize()
+
+        history[
+            TARGET_COLUMN
+        ] = pd.to_numeric(
+            history[
+                TARGET_COLUMN
+            ],
+            errors="raise",
         )
+
+        if (
+            history[
+                TARGET_COLUMN
+            ]
+            < 0
+        ).any():
+
+            raise ValueError(
+                f"Negative demand found for medicine={medicine_id}."
+            )
 
         # Aggregate same-day transactions.
         history = (
@@ -461,48 +679,96 @@ class ProductionForecastService:
                     TIMESTAMP_COLUMN,
                 ],
                 as_index=False,
-            )[TARGET_COLUMN]
+            )[
+                TARGET_COLUMN
+            ]
             .sum()
+            .sort_values(
+                TIMESTAMP_COLUMN
+            )
+            .reset_index(
+                drop=True
+            )
         )
 
-        history = history.sort_values(
-            TIMESTAMP_COLUMN
+        start_date = (
+            history[
+                TIMESTAMP_COLUMN
+            ].min()
         )
 
-        start_date = history[TIMESTAMP_COLUMN].min()
-        end_date = history[TIMESTAMP_COLUMN].max()
+        observed_end_date = (
+            history[
+                TIMESTAMP_COLUMN
+            ].max()
+        )
 
-        if pd.isna(start_date) or pd.isna(end_date):
+        if (
+            pd.isna(start_date)
+            or pd.isna(observed_end_date)
+        ):
+
             raise ValueError(
                 f"Invalid date range for medicine={medicine_id}."
             )
 
-        if end_date < start_date:
-            raise ValueError(
-                f"Invalid history date range for medicine="
-                f"{medicine_id}: {start_date} > {end_date}"
+        if forecast_origin is None:
+
+            aligned_end_date = (
+                observed_end_date
             )
 
-        # Continuous daily calendar.
+        else:
+
+            aligned_end_date = (
+                pd.Timestamp(
+                    forecast_origin
+                )
+                .normalize()
+            )
+
+            if (
+                aligned_end_date
+                < observed_end_date
+            ):
+
+                raise ValueError(
+                    "forecast_origin cannot be earlier than "
+                    "the latest observed medicine date. "
+                    f"medicine={medicine_id}, "
+                    f"forecast_origin={aligned_end_date}, "
+                    f"observed_end={observed_end_date}"
+                )
+
         calendar = pd.date_range(
             start=start_date,
-            end=end_date,
+            end=aligned_end_date,
             freq="D",
         )
 
         daily = (
             history
-            .set_index(TIMESTAMP_COLUMN)[TARGET_COLUMN]
+            .set_index(
+                TIMESTAMP_COLUMN
+            )[
+                TARGET_COLUMN
+            ]
             .reindex(
                 calendar,
                 fill_value=0.0,
             )
-            .rename(TARGET_COLUMN)
-            .rename_axis(TIMESTAMP_COLUMN)
+            .rename(
+                TARGET_COLUMN
+            )
+            .rename_axis(
+                TIMESTAMP_COLUMN
+            )
             .reset_index()
         )
 
-        daily[MEDICINE_ID_COLUMN] = medicine_id
+        daily[
+            MEDICINE_ID_COLUMN
+        ] = medicine_id
 
         daily = daily[
             [
@@ -512,9 +778,13 @@ class ProductionForecastService:
             ]
         ]
 
-        daily[TARGET_COLUMN] = (
+        daily[
+            TARGET_COLUMN
+        ] = (
             pd.to_numeric(
-                daily[TARGET_COLUMN],
+                daily[
+                    TARGET_COLUMN
+                ],
                 errors="raise",
             )
             .fillna(0.0)
@@ -522,55 +792,57 @@ class ProductionForecastService:
         )
 
         expected_rows = (
-            end_date - start_date
+            aligned_end_date
+            - start_date
         ).days + 1
 
         if len(daily) != expected_rows:
+
             raise ValueError(
-                f"Daily calendar construction failed for "
+                "Daily calendar construction failed for "
                 f"medicine={medicine_id}: expected "
                 f"{expected_rows} rows, got {len(daily)}."
             )
 
-        if daily[TIMESTAMP_COLUMN].duplicated().any():
+        if daily[
+            TIMESTAMP_COLUMN
+        ].duplicated().any():
+
             raise ValueError(
-                f"Duplicate dates remain after normalization "
+                "Duplicate dates remain after normalization "
                 f"for medicine={medicine_id}."
             )
 
-        if len(daily) >= 3:
-
-            inferred_freq = pd.infer_freq(
-                daily[TIMESTAMP_COLUMN]
-            )
-
-            if inferred_freq not in {"D", "1D"}:
-                raise ValueError(
-                    f"Daily frequency validation failed for "
-                    f"medicine={medicine_id}: "
-                    f"inferred_freq={inferred_freq!r}"
-                )
-
         demand_array = daily[
             TARGET_COLUMN
-        ].to_numpy(dtype=float)
+        ].to_numpy(
+            dtype=float
+        )
 
-        if not np.isfinite(demand_array).all():
+        if not np.isfinite(
+            demand_array
+        ).all():
+
             raise ValueError(
-                f"Daily history contains non-finite demand "
+                "Daily history contains non-finite demand "
                 f"for medicine={medicine_id}."
             )
 
         logger.info(
             "DAILY HISTORY | medicine=%s | rows=%d | "
-            "start=%s | end=%s | zero_days=%d",
+            "start=%s | observed_end=%s | aligned_end=%s | "
+            "zero_days=%d",
             medicine_id,
             len(daily),
             start_date,
-            end_date,
+            observed_end_date,
+            aligned_end_date,
             int(
                 (
-                    daily[TARGET_COLUMN] == 0
+                    daily[
+                        TARGET_COLUMN
+                    ]
+                    == 0
                 ).sum()
             ),
         )
@@ -578,7 +850,7 @@ class ProductionForecastService:
         return daily
 
     # ========================================================================
-    # Routing
+    # ROUTING
     # ========================================================================
 
     def _get_route(
@@ -587,30 +859,46 @@ class ProductionForecastService:
         routing_table: pd.DataFrame,
     ) -> tuple[str, float, str]:
 
+        """
+        Return the frozen routing decision.
+
+        IMPORTANT:
+
+        Existing routing records are preserved exactly.
+
+        This method does NOT recompute model selection from
+        Validation_Advantage_Pct.
+
+        That prevents valid unvalidated medicines with NaN advantage
+        from losing their explicit provenance.
+        """
+
         medicine_id = str(
             medicine_id
         ).strip()
 
         normalized_ids = (
-            routing_table[MEDICINE_ID_COLUMN]
+            routing_table[
+                MEDICINE_ID_COLUMN
+            ]
             .astype(str)
             .str.strip()
         )
 
         rows = routing_table[
-            normalized_ids == medicine_id
+            normalized_ids
+            == medicine_id
         ]
 
-        # IMPORTANT:
-        # The routing table contains 79 medicines, while production
-        # history currently contains 158 medicines.
+        # Missing routing record:
         #
-        # Missing routing records intentionally fall back to TSB.
+        # This is different from an explicit routing record containing
+        # Validation_Advantage_Pct = NaN.
         if rows.empty:
 
             logger.warning(
                 "No routing record for medicine=%s. "
-                "Falling back to TSB.",
+                "Using explicit TSB service fallback.",
                 medicine_id,
             )
 
@@ -620,67 +908,117 @@ class ProductionForecastService:
                 "missing_routing_record",
             )
 
-        row = rows.iloc[0]
+        if len(rows) != 1:
 
-        try:
-
-            advantage = float(
-                row["Validation_Advantage_Pct"]
+            raise ValueError(
+                "Expected exactly one routing record for "
+                f"medicine={medicine_id}, got {len(rows)}."
             )
 
-        except (
-            TypeError,
-            ValueError,
+        row = rows.iloc[0]
+
+        selected_model = str(
+            row[
+                SELECTED_MODEL_COLUMN
+            ]
+        ).strip()
+
+        if selected_model not in {
+            MODEL_CHRONOS,
+            MODEL_TSB,
+        }:
+
+            raise ValueError(
+                "Routing record contains unsupported model "
+                f"for medicine={medicine_id}: "
+                f"{selected_model!r}"
+            )
+
+        routing_reason = str(
+            row[
+                ROUTING_REASON_COLUMN
+            ]
+        ).strip()
+
+        if not routing_reason:
+
+            raise ValueError(
+                "Routing record contains empty Routing_Reason "
+                f"for medicine={medicine_id}."
+            )
+
+        raw_advantage = row[
+            VALIDATION_ADVANTAGE_COLUMN
+        ]
+
+        if pd.isna(
+            raw_advantage
         ):
 
             advantage = float("nan")
 
-        if not np.isfinite(advantage):
-
-            logger.warning(
-                "Invalid routing advantage for medicine=%s. "
-                "Falling back to TSB.",
-                medicine_id,
-            )
-
-            return (
-                MODEL_TSB,
-                float("nan"),
-                "invalid_or_missing_advantage",
-            )
-
-        selected_model = self.router.select_model(
-            advantage
-        )
-
-        if selected_model == MODEL_CHRONOS:
-
-            reason = (
-                "validation_advantage_ge_30pct"
-            )
-
-        elif selected_model == MODEL_TSB:
-
-            reason = (
-                "validation_advantage_lt_30pct"
-            )
-
         else:
 
+            try:
+
+                advantage = float(
+                    raw_advantage
+                )
+
+            except (
+                TypeError,
+                ValueError,
+            ) as exc:
+
+                raise ValueError(
+                    "Routing record contains invalid "
+                    f"{VALIDATION_ADVANTAGE_COLUMN} "
+                    f"for medicine={medicine_id}: "
+                    f"{raw_advantage!r}"
+                ) from exc
+
+            if not np.isfinite(
+                advantage
+            ):
+
+                raise ValueError(
+                    "Routing record contains non-finite "
+                    f"{VALIDATION_ADVANTAGE_COLUMN} "
+                    f"for medicine={medicine_id}: "
+                    f"{raw_advantage!r}"
+                )
+
+        if (
+            selected_model
+            == MODEL_CHRONOS
+            and not np.isfinite(
+                advantage
+            )
+        ):
+
             raise ValueError(
-                "Production router returned unsupported "
-                f"model {selected_model!r} "
+                "Chronos routing record requires a finite "
+                f"{VALIDATION_ADVANTAGE_COLUMN} "
                 f"for medicine={medicine_id}."
             )
+
+        logger.info(
+            "FROZEN ROUTE | medicine=%s | model=%s | "
+            "advantage=%s | reason=%s",
+            medicine_id,
+            selected_model,
+            advantage,
+            routing_reason,
+        )
 
         return (
             selected_model,
             advantage,
-            reason,
+            routing_reason,
         )
 
     # ========================================================================
-    # Chronos
+    # CHRONOS
     # ========================================================================
 
     def _forecast_chronos(
@@ -689,9 +1027,13 @@ class ProductionForecastService:
         history_df: pd.DataFrame,
     ) -> ProductionForecastResult:
 
-        predictor_config = self.predictor.config
+        predictor_config = (
+            self.predictor.config
+        )
 
-        chronos_history = history_df.copy()
+        chronos_history = (
+            history_df.copy()
+        )
 
         rename_map = {}
 
@@ -699,6 +1041,7 @@ class ProductionForecastService:
             MEDICINE_ID_COLUMN
             != predictor_config.id_column
         ):
+
             rename_map[
                 MEDICINE_ID_COLUMN
             ] = predictor_config.id_column
@@ -707,6 +1050,7 @@ class ProductionForecastService:
             TIMESTAMP_COLUMN
             != predictor_config.timestamp_column
         ):
+
             rename_map[
                 TIMESTAMP_COLUMN
             ] = predictor_config.timestamp_column
@@ -715,6 +1059,7 @@ class ProductionForecastService:
             TARGET_COLUMN
             != predictor_config.target_column
         ):
+
             rename_map[
                 TARGET_COLUMN
             ] = predictor_config.target_column
@@ -735,26 +1080,34 @@ class ProductionForecastService:
 
         missing = (
             required_predictor_columns
-            - set(chronos_history.columns)
+            - set(
+                chronos_history.columns
+            )
         )
 
         if missing:
+
             raise ValueError(
-                "Chronos history adapter produced "
-                "missing columns: "
+                "Chronos history adapter produced missing columns: "
                 f"{sorted(missing)}"
             )
 
-        result = self.predictor.forecast_medicine(
-            medicine_id,
-            chronos_history,
+        result = (
+            self.predictor.forecast_medicine(
+                medicine_id,
+                chronos_history,
+            )
         )
 
-        expected_horizon = (
+        expected_horizon = int(
             self.config.prediction_length
         )
 
-        if len(result.days) != expected_horizon:
+        if (
+            len(result.days)
+            != expected_horizon
+        ):
+
             raise ValueError(
                 f"Chronos returned {len(result.days)} forecast days "
                 f"for medicine={medicine_id}; "
@@ -762,100 +1115,159 @@ class ProductionForecastService:
             )
 
         dates = [
-            pd.Timestamp(day.forecast_date)
-            for day in result.days
-        ]
-
-        predicted = [
-            float(day.predicted_demand)
+            pd.Timestamp(
+                day.forecast_date
+            ).normalize()
             for day in result.days
         ]
 
         p10 = [
-            float(day.quantiles.p10)
+            float(
+                day.quantiles.p10
+            )
             for day in result.days
         ]
 
         p50 = [
-            float(day.quantiles.p50)
+            float(
+                day.quantiles.p50
+            )
             for day in result.days
         ]
 
         p90 = [
-            float(day.quantiles.p90)
+            float(
+                day.quantiles.p90
+            )
             for day in result.days
         ]
 
+        predicted = list(
+            p50
+        )
+
+        if len(set(dates)) != len(dates):
+
+            raise ValueError(
+                "Chronos returned duplicate forecast dates "
+                f"for medicine={medicine_id}."
+            )
+
+        if dates != sorted(dates):
+
+            raise ValueError(
+                "Chronos returned unsorted forecast dates "
+                f"for medicine={medicine_id}."
+            )
+
         for name, values in {
-            "predicted_demand": predicted,
-            "p10": p10,
-            "p50": p50,
-            "p90": p90,
+            "Predicted_Demand": predicted,
+            "P10": p10,
+            "P50": p50,
+            "P90": p90,
         }.items():
 
-            array = np.asarray(
+            values_array = np.asarray(
                 values,
                 dtype=float,
             )
 
-            if not np.isfinite(array).all():
+            if not np.isfinite(
+                values_array
+            ).all():
+
                 raise ValueError(
                     f"Chronos returned non-finite {name} "
                     f"for medicine={medicine_id}."
                 )
 
-            if (array < 0).any():
+            if (
+                values_array < 0
+            ).any():
+
                 raise ValueError(
                     f"Chronos returned negative {name} "
                     f"for medicine={medicine_id}."
                 )
 
-        if any(
-            low > median
-            for low, median in zip(p10, p50)
+        if (
+            np.asarray(p10)
+            > np.asarray(p50)
+        ).any():
+
+            raise ValueError(
+                "Chronos P10 exceeds P50 "
+                f"for medicine={medicine_id}."
+            )
+
+        if (
+            np.asarray(p50)
+            > np.asarray(p90)
+        ).any():
+
+            raise ValueError(
+                "Chronos P50 exceeds P90 "
+                f"for medicine={medicine_id}."
+            )
+
+        if not np.array_equal(
+            np.asarray(
+                predicted,
+                dtype=float,
+            ),
+            np.asarray(
+                p50,
+                dtype=float,
+            ),
         ):
+
             raise ValueError(
-                f"Chronos P10 exceeds P50 "
+                "Chronos production invariant violated: "
+                "Predicted_Demand must equal P50 exactly."
+            )
+
+        context_length_used = int(
+            result.context_length_used
+        )
+
+        prediction_length = int(
+            result.prediction_length
+        )
+
+        if context_length_used <= 0:
+
+            raise ValueError(
+                "Chronos returned invalid context_length_used "
                 f"for medicine={medicine_id}."
             )
 
-        if any(
-            median > high
-            for median, high in zip(p50, p90)
+        if (
+            prediction_length
+            != expected_horizon
         ):
-            raise ValueError(
-                f"Chronos P50 exceeds P90 "
-                f"for medicine={medicine_id}."
-            )
 
-        if len(set(dates)) != len(dates):
             raise ValueError(
-                f"Chronos returned duplicate forecast dates "
-                f"for medicine={medicine_id}."
-            )
-
-        if dates != sorted(dates):
-            raise ValueError(
-                f"Chronos forecast dates are not sorted "
-                f"for medicine={medicine_id}."
+                "Chronos returned invalid prediction_length "
+                f"for medicine={medicine_id}: "
+                f"{prediction_length}."
             )
 
         return ProductionForecastResult(
-            medicine_id=str(medicine_id),
+            medicine_id=str(
+                medicine_id
+            ),
             selected_model=MODEL_CHRONOS,
-            routing_advantage_pct=float("nan"),
+            validation_advantage_pct=float(
+                "nan"
+            ),
             routing_reason="",
             forecast_dates=dates,
             predicted_demand=predicted,
             p10=p10,
             p50=p50,
             p90=p90,
-            context_length_used=(
-                result.context_length_used
-            ),
-            prediction_length=(
-                result.prediction_length
-            ),
+            context_length_used=context_length_used,
+            prediction_length=prediction_length,
             generated_at=result.generated_at,
         )
 
@@ -870,91 +1282,137 @@ class ProductionForecastService:
     ) -> ProductionForecastResult:
 
         normalized_ids = (
-            history_df[MEDICINE_ID_COLUMN]
+            history_df[
+                MEDICINE_ID_COLUMN
+            ]
             .astype(str)
             .str.strip()
         )
 
+        medicine_id = str(
+            medicine_id
+        ).strip()
+
         history = (
             history_df[
                 normalized_ids
-                == str(medicine_id).strip()
+                == medicine_id
             ]
-            .sort_values(TIMESTAMP_COLUMN)
+            .sort_values(
+                TIMESTAMP_COLUMN
+            )
             .copy()
         )
 
         if history.empty:
+
             raise InsufficientHistoryError(
-                f"No history for item_id={medicine_id}"
+                f"No history for medicine_id={medicine_id}"
             )
 
         target = (
-            history[TARGET_COLUMN]
+            pd.to_numeric(
+                history[
+                    TARGET_COLUMN
+                ],
+                errors="raise",
+            )
             .astype(float)
             .clip(lower=0.0)
         )
 
-        horizon = self.config.prediction_length
+        horizon = int(
+            self.config.prediction_length
+        )
+
+        if horizon <= 0:
+
+            raise ValueError(
+                f"prediction_length must be positive, got {horizon}."
+            )
 
         prediction = tsb_forecast(
             target,
             horizon,
         )
 
-        if len(prediction) != horizon:
+        if (
+            len(prediction)
+            != horizon
+        ):
+
             raise ValueError(
-                f"TSB returned {len(prediction)} values "
+                f"TSB returned {len(prediction)} predictions "
                 f"for medicine={medicine_id}; "
                 f"expected {horizon}."
             )
 
-        if not np.isfinite(prediction).all():
+        if not np.isfinite(
+            prediction
+        ).all():
+
             raise ValueError(
-                f"TSB returned non-finite predictions "
+                "TSB returned non-finite predictions "
                 f"for medicine={medicine_id}."
             )
 
-        last_date = pd.Timestamp(
-            history[TIMESTAMP_COLUMN].max()
-        ).normalize()
+        if (
+            prediction < 0
+        ).any():
+
+            raise ValueError(
+                "TSB returned negative predictions "
+                f"for medicine={medicine_id}."
+            )
+
+        last_date = (
+            pd.Timestamp(
+                history[
+                    TIMESTAMP_COLUMN
+                ].max()
+            )
+            .normalize()
+        )
 
         forecast_dates = list(
             pd.date_range(
                 start=(
                     last_date
-                    + pd.Timedelta(days=1)
+                    + pd.Timedelta(
+                        days=1
+                    )
                 ),
                 periods=horizon,
                 freq="D",
             )
         )
 
-        prediction = np.maximum(
-            prediction,
-            0.0,
-        )
-
         return ProductionForecastResult(
-            medicine_id=str(medicine_id),
+            medicine_id=medicine_id,
             selected_model=MODEL_TSB,
-            routing_advantage_pct=float("nan"),
+            validation_advantage_pct=float(
+                "nan"
+            ),
             routing_reason="",
             forecast_dates=forecast_dates,
             predicted_demand=[
-                round(float(x), 2)
-                for x in prediction
+                float(value)
+                for value in prediction
             ],
             p10=None,
             p50=None,
             p90=None,
-            context_length_used=len(history),
+            context_length_used=len(
+                history
+            ),
             prediction_length=horizon,
-            generated_at=datetime.now(timezone.utc),
+            generated_at=datetime.now(
+                timezone.utc
+            ),
         )
 
     # ========================================================================
-    # Single medicine
+    # SINGLE MEDICINE FORECAST
     # ========================================================================
 
     def forecast_medicine(
@@ -962,16 +1420,23 @@ class ProductionForecastService:
         medicine_id: str,
         history_df: pd.DataFrame,
         routing_table: pd.DataFrame,
+        forecast_origin: Optional[pd.Timestamp] = None,
     ) -> ProductionForecastResult:
 
-        self._validate_history(history_df)
-        self._validate_routing_table(routing_table)
+        self._validate_history(
+            history_df
+        )
+
+        self._validate_routing_table(
+            routing_table
+        )
 
         medicine_id = str(
             medicine_id
         ).strip()
 
         if not medicine_id:
+
             raise ValueError(
                 "medicine_id must not be empty."
             )
@@ -980,13 +1445,14 @@ class ProductionForecastService:
             self._prepare_daily_history(
                 medicine_id,
                 history_df,
+                forecast_origin=forecast_origin,
             )
         )
 
         (
             selected_model,
             advantage,
-            reason,
+            routing_reason,
         ) = self._get_route(
             medicine_id,
             routing_table,
@@ -998,17 +1464,23 @@ class ProductionForecastService:
             medicine_id,
             selected_model,
             advantage,
-            reason,
+            routing_reason,
         )
 
-        if selected_model == MODEL_CHRONOS:
+        if (
+            selected_model
+            == MODEL_CHRONOS
+        ):
 
             result = self._forecast_chronos(
                 medicine_id,
                 daily_history,
             )
 
-        elif selected_model == MODEL_TSB:
+        elif (
+            selected_model
+            == MODEL_TSB
+        ):
 
             result = self._forecast_tsb(
                 medicine_id,
@@ -1022,13 +1494,24 @@ class ProductionForecastService:
                 f"{selected_model!r}"
             )
 
-        result.routing_advantage_pct = advantage
-        result.routing_reason = reason
+        # --------------------------------------------------------------------
+        # Preserve routing provenance from the frozen routing decision.
+        # --------------------------------------------------------------------
+
+        result.selected_model = selected_model
+
+        result.validation_advantage_pct = (
+            advantage
+        )
+
+        result.routing_reason = (
+            routing_reason
+        )
 
         return result
 
     # ========================================================================
-    # Batch forecasting
+    # BATCH FORECASTING
     # ========================================================================
 
     def forecast_batch(
@@ -1038,62 +1521,152 @@ class ProductionForecastService:
         item_ids: Optional[List[str]] = None,
     ) -> tuple[pd.DataFrame, List[str]]:
 
-        self._validate_history(history_df)
-        self._validate_routing_table(routing_table)
+        self._validate_history(
+            history_df
+        )
 
-        history_ids = set(
-            history_df[MEDICINE_ID_COLUMN]
+        self._validate_routing_table(
+            routing_table
+        )
+
+        normalized_history = (
+            history_df.copy()
+        )
+
+        normalized_history[
+            MEDICINE_ID_COLUMN
+        ] = (
+            normalized_history[
+                MEDICINE_ID_COLUMN
+            ]
             .astype(str)
             .str.strip()
+        )
+
+        normalized_history[
+            TIMESTAMP_COLUMN
+        ] = pd.to_datetime(
+            normalized_history[
+                TIMESTAMP_COLUMN
+            ],
+            errors="raise",
+        ).dt.normalize()
+
+        history_ids = set(
+            normalized_history[
+                MEDICINE_ID_COLUMN
+            ]
             .unique()
         )
 
         if item_ids is None:
 
-            # Production default:
-            # forecast every medicine in Silver history.
-            ids = sorted(history_ids)
+            ids = sorted(
+                history_ids
+            )
 
         else:
 
             ids = [
-                str(x).strip()
-                for x in item_ids
-                if str(x).strip()
+                str(
+                    medicine_id
+                ).strip()
+                for medicine_id in item_ids
+                if str(
+                    medicine_id
+                ).strip()
             ]
 
-            ids = list(dict.fromkeys(ids))
+            ids = list(
+                dict.fromkeys(
+                    ids
+                )
+            )
 
             unknown_ids = [
-                x
-                for x in ids
-                if x not in history_ids
+                medicine_id
+                for medicine_id in ids
+                if medicine_id
+                not in history_ids
             ]
 
             if unknown_ids:
+
                 logger.warning(
                     "Requested medicine IDs not found in history: %s",
                     unknown_ids[:20],
                 )
 
             ids = [
-                x
-                for x in ids
-                if x in history_ids
+                medicine_id
+                for medicine_id in ids
+                if medicine_id
+                in history_ids
             ]
 
         if not ids:
+
             raise ValueError(
                 "No medicine IDs available for production forecasting."
             )
 
-        logger.info(
-            "Starting production forecast batch: %d medicines",
-            len(ids),
+        global_forecast_origin = (
+            normalized_history[
+                TIMESTAMP_COLUMN
+            ]
+            .max()
         )
 
-        records = []
-        failed = []
+        if pd.isna(
+            global_forecast_origin
+        ):
+
+            raise ValueError(
+                "Unable to determine global forecast origin."
+            )
+
+        global_forecast_origin = (
+            pd.Timestamp(
+                global_forecast_origin
+            )
+            .normalize()
+        )
+
+        horizon = int(
+            self.config.prediction_length
+        )
+
+        if horizon <= 0:
+
+            raise ValueError(
+                f"prediction_length must be positive, got {horizon}."
+            )
+
+        expected_forecast_dates = list(
+            pd.date_range(
+                start=(
+                    global_forecast_origin
+                    + pd.Timedelta(
+                        days=1
+                    )
+                ),
+                periods=horizon,
+                freq="D",
+            )
+        )
+
+        logger.info(
+            "Starting production forecast batch | medicines=%d | "
+            "origin=%s | window=%s -> %s",
+            len(ids),
+            global_forecast_origin.date(),
+            expected_forecast_dates[0].date(),
+            expected_forecast_dates[-1].date(),
+        )
+
+        records: list[dict] = []
+
+        failed: list[str] = []
 
         for medicine_id in ids:
 
@@ -1101,71 +1674,152 @@ class ProductionForecastService:
 
                 result = self.forecast_medicine(
                     medicine_id,
-                    history_df,
+                    normalized_history,
                     routing_table,
+                    forecast_origin=global_forecast_origin,
                 )
 
-                horizon = result.prediction_length
+                if (
+                    result.selected_model
+                    not in {
+                        MODEL_CHRONOS,
+                        MODEL_TSB,
+                    }
+                ):
 
-                if len(result.forecast_dates) != horizon:
                     raise ValueError(
-                        f"Forecast date count mismatch "
+                        "Unsupported result model "
+                        f"{result.selected_model!r} "
                         f"for medicine={medicine_id}."
                     )
 
-                if len(result.predicted_demand) != horizon:
+                if (
+                    result.prediction_length
+                    != horizon
+                ):
+
                     raise ValueError(
-                        f"Prediction count mismatch "
-                        f"for medicine={medicine_id}."
+                        "Prediction length mismatch for "
+                        f"medicine={medicine_id}: "
+                        f"{result.prediction_length} != {horizon}."
                     )
 
-                if result.selected_model == MODEL_CHRONOS:
+                if (
+                    len(
+                        result.forecast_dates
+                    )
+                    != horizon
+                ):
+
+                    raise ValueError(
+                        "Forecast date count mismatch for "
+                        f"medicine={medicine_id}."
+                    )
+
+                if (
+                    len(
+                        result.predicted_demand
+                    )
+                    != horizon
+                ):
+
+                    raise ValueError(
+                        "Prediction count mismatch for "
+                        f"medicine={medicine_id}."
+                    )
+
+                actual_forecast_dates = [
+                    pd.Timestamp(
+                        date
+                    ).normalize()
+                    for date in result.forecast_dates
+                ]
+
+                if (
+                    actual_forecast_dates
+                    != expected_forecast_dates
+                ):
+
+                    raise ValueError(
+                        "Forecast dates are not aligned to the "
+                        "global forecast origin for "
+                        f"medicine={medicine_id}. "
+                        f"Expected "
+                        f"{expected_forecast_dates[0].date()} -> "
+                        f"{expected_forecast_dates[-1].date()}, "
+                        f"got "
+                        f"{actual_forecast_dates[0].date()} -> "
+                        f"{actual_forecast_dates[-1].date()}."
+                    )
+
+                if (
+                    result.selected_model
+                    == MODEL_CHRONOS
+                ):
 
                     if (
                         result.p10 is None
                         or result.p50 is None
                         or result.p90 is None
                     ):
+
                         raise ValueError(
-                            f"Chronos result missing quantiles "
+                            "Chronos result missing quantiles "
                             f"for medicine={medicine_id}."
                         )
 
                     if not (
-                        len(result.p10)
-                        == len(result.p50)
-                        == len(result.p90)
+                        len(
+                            result.p10
+                        )
+                        == len(
+                            result.p50
+                        )
+                        == len(
+                            result.p90
+                        )
                         == horizon
                     ):
+
                         raise ValueError(
-                            f"Chronos quantile length mismatch "
+                            "Chronos quantile length mismatch "
                             f"for medicine={medicine_id}."
                         )
 
-                elif result.selected_model == MODEL_TSB:
+                    if not np.array_equal(
+                        np.asarray(
+                            result.predicted_demand,
+                            dtype=float,
+                        ),
+                        np.asarray(
+                            result.p50,
+                            dtype=float,
+                        ),
+                    ):
+
+                        raise ValueError(
+                            "Chronos production invariant violated: "
+                            "Predicted_Demand must equal P50 exactly "
+                            f"for medicine={medicine_id}."
+                        )
+
+                else:
 
                     if any(
-                        value is not None
-                        for value in (
+                        values is not None
+                        for values in (
                             result.p10,
                             result.p50,
                             result.p90,
                         )
                     ):
+
                         raise ValueError(
-                            f"TSB result unexpectedly contains "
+                            "TSB result unexpectedly contains "
                             f"quantiles for medicine={medicine_id}."
                         )
 
-                else:
-
-                    raise ValueError(
-                        f"Unsupported result model "
-                        f"{result.selected_model!r} "
-                        f"for medicine={medicine_id}."
-                    )
-
-                for i, forecast_date in enumerate(
+                for index, forecast_date in enumerate(
                     result.forecast_dates
                 ):
 
@@ -1175,46 +1829,65 @@ class ProductionForecastService:
                                 result.medicine_id,
 
                             "Forecast_Date":
-                                forecast_date,
+                                pd.Timestamp(
+                                    forecast_date
+                                ).normalize(),
 
-                            "Selected_Model":
+                            SELECTED_MODEL_COLUMN:
                                 result.selected_model,
 
                             "Predicted_Demand":
-                                result.predicted_demand[i],
+                                float(
+                                    result.predicted_demand[
+                                        index
+                                    ]
+                                ),
 
                             "P10":
                                 (
-                                    result.p10[i]
-                                    if result.p10 is not None
+                                    float(
+                                        result.p10[index]
+                                    )
+                                    if result.p10
+                                    is not None
                                     else np.nan
                                 ),
 
                             "P50":
                                 (
-                                    result.p50[i]
-                                    if result.p50 is not None
+                                    float(
+                                        result.p50[index]
+                                    )
+                                    if result.p50
+                                    is not None
                                     else np.nan
                                 ),
 
                             "P90":
                                 (
-                                    result.p90[i]
-                                    if result.p90 is not None
+                                    float(
+                                        result.p90[index]
+                                    )
+                                    if result.p90
+                                    is not None
                                     else np.nan
                                 ),
 
-                            "Routing_Advantage_Pct":
-                                result.routing_advantage_pct,
+                            VALIDATION_ADVANTAGE_COLUMN:
+                                result.validation_advantage_pct,
 
-                            "Routing_Reason":
+                            ROUTING_REASON_COLUMN:
                                 result.routing_reason,
 
                             "Context_Length_Used":
-                                result.context_length_used,
+                                int(
+                                    result.context_length_used
+                                ),
 
                             "Prediction_Length":
-                                result.prediction_length,
+                                int(
+                                    result.prediction_length
+                                ),
 
                             "Generated_At":
                                 result.generated_at,
@@ -1224,30 +1897,36 @@ class ProductionForecastService:
             except InsufficientHistoryError as exc:
 
                 logger.warning(
-                    "Skipping medicine=%s: %s",
+                    "Skipping medicine=%s due to insufficient history: %s",
                     medicine_id,
                     exc,
                 )
 
-                failed.append(medicine_id)
+                failed.append(
+                    medicine_id
+                )
 
             except Exception:
 
                 logger.exception(
-                    "Production forecast failed "
-                    "for medicine=%s",
+                    "Production forecast failed for medicine=%s",
                     medicine_id,
                 )
 
-                failed.append(medicine_id)
+                failed.append(
+                    medicine_id
+                )
 
         if not records:
+
             raise RuntimeError(
-                "Production forecast generated "
-                "no successful results."
+                "Production forecast generated no successful results."
             )
 
-        result_df = pd.DataFrame(records)
+        result_df = pd.DataFrame(
+            records,
+            columns=OUTPUT_COLUMNS,
+        )
 
         result_df = (
             result_df
@@ -1257,10 +1936,19 @@ class ProductionForecastService:
                     "Forecast_Date",
                 ]
             )
-            .reset_index(drop=True)
+            .reset_index(
+                drop=True
+            )
         )
 
-        self._validate_output(result_df)
+        self._validate_output(
+            result_df
+        )
+
+        self._validate_global_forecast_window(
+            result_df,
+            expected_forecast_dates,
+        )
 
         logger.info(
             "Production forecast complete | "
@@ -1272,10 +1960,85 @@ class ProductionForecastService:
             len(result_df),
         )
 
-        return result_df, failed
+        return (
+            result_df,
+            failed,
+        )
 
     # ========================================================================
-    # Output validation
+    # GLOBAL FORECAST WINDOW VALIDATION
+    # ========================================================================
+
+    @staticmethod
+    def _validate_global_forecast_window(
+        result_df: pd.DataFrame,
+        expected_forecast_dates: list[pd.Timestamp],
+    ) -> None:
+
+        if result_df.empty:
+            raise ValueError(
+                "Cannot validate forecast window on empty output."
+            )
+
+        expected = [
+            pd.Timestamp(
+                date
+            ).normalize()
+            for date in expected_forecast_dates
+        ]
+
+        actual_unique_dates = sorted(
+            pd.to_datetime(
+                result_df[
+                    "Forecast_Date"
+                ],
+                errors="raise",
+            )
+            .dt.normalize()
+            .unique()
+        )
+
+        if list(
+            actual_unique_dates
+        ) != expected:
+
+            raise ValueError(
+                "Final production output does not contain exactly "
+                "the expected shared forecast window."
+            )
+
+        grouped_dates = (
+            result_df
+            .groupby(
+                MEDICINE_ID_COLUMN
+            )[
+                "Forecast_Date"
+            ]
+            .apply(
+                lambda values: [
+                    pd.Timestamp(
+                        value
+                    ).normalize()
+                    for value in values
+                ]
+            )
+        )
+
+        for (
+            medicine_id,
+            dates,
+        ) in grouped_dates.items():
+
+            if dates != expected:
+
+                raise ValueError(
+                    "Final production output has inconsistent "
+                    "forecast dates for "
+                    f"medicine={medicine_id}."
+                )
+
+    # ========================================================================
+    # OUTPUT VALIDATION
     # ========================================================================
 
     def _validate_output(
@@ -1291,76 +2054,71 @@ class ProductionForecastService:
                 "result_df must be a pandas DataFrame."
             )
 
-        required = {
-            MEDICINE_ID_COLUMN,
-            "Forecast_Date",
-            "Selected_Model",
-            "Predicted_Demand",
-            "Routing_Advantage_Pct",
-            "Routing_Reason",
-            "Context_Length_Used",
-            "Prediction_Length",
-            "Generated_At",
-        }
-
-        missing = required - set(result_df.columns)
-
-        if missing:
-            raise ValueError(
-                "Production output missing columns: "
-                f"{sorted(missing)}"
-            )
-
         if result_df.empty:
             raise ValueError(
                 "Production output is empty."
             )
 
-        # Medicine IDs
-        if result_df[MEDICINE_ID_COLUMN].isna().any():
+        missing = (
+            set(
+                OUTPUT_COLUMNS
+            )
+            - set(
+                result_df.columns
+            )
+        )
+
+        if missing:
+
+            raise ValueError(
+                "Production output missing columns: "
+                f"{sorted(missing)}"
+            )
+
+        # --------------------------------------------------------------------
+        # MEDICINE IDs
+        # --------------------------------------------------------------------
+
+        if result_df[
+            MEDICINE_ID_COLUMN
+        ].isna().any():
+
             raise ValueError(
                 "Production output contains null Medicine_ID values."
             )
 
-        output_ids = (
-            result_df[MEDICINE_ID_COLUMN]
+        medicine_ids = (
+            result_df[
+                MEDICINE_ID_COLUMN
+            ]
             .astype(str)
             .str.strip()
         )
 
-        if output_ids.eq("").any():
+        if medicine_ids.eq(
+            ""
+        ).any():
+
             raise ValueError(
                 "Production output contains empty Medicine_ID values."
             )
 
-        # Predicted demand
-        predicted = pd.to_numeric(
-            result_df["Predicted_Demand"],
-            errors="coerce",
+        # --------------------------------------------------------------------
+        # MODELS
+        # --------------------------------------------------------------------
+
+        models = (
+            result_df[
+                SELECTED_MODEL_COLUMN
+            ]
+            .astype(str)
+            .str.strip()
         )
 
-        if predicted.isna().any():
-            raise ValueError(
-                "Production output contains null/non-numeric "
-                "predicted demand."
-            )
-
-        if not np.isfinite(
-            predicted.to_numpy(dtype=float)
-        ).all():
-            raise ValueError(
-                "Production output contains non-finite "
-                "predicted demand."
-            )
-
-        if (predicted < 0).any():
-            raise ValueError(
-                "Production output contains negative demand."
-            )
-
-        # Models
         invalid_models = (
-            set(result_df["Selected_Model"].unique())
+            set(
+                models.unique()
+            )
             - {
                 MODEL_CHRONOS,
                 MODEL_TSB,
@@ -1368,97 +2126,260 @@ class ProductionForecastService:
         )
 
         if invalid_models:
+
             raise ValueError(
                 "Unexpected production models: "
                 f"{sorted(invalid_models)}"
             )
 
-        # Dates
+        # --------------------------------------------------------------------
+        # FORECAST DATES
+        # --------------------------------------------------------------------
+
         forecast_dates = pd.to_datetime(
-            result_df["Forecast_Date"],
+            result_df[
+                "Forecast_Date"
+            ],
             errors="coerce",
         )
 
         if forecast_dates.isna().any():
+
             raise ValueError(
                 "Production output contains invalid Forecast_Date values."
             )
 
-        duplicate_dates = result_df.duplicated(
-            subset=[
-                MEDICINE_ID_COLUMN,
-                "Forecast_Date",
-            ],
-            keep=False,
+        duplicate_rows = (
+            result_df.duplicated(
+                subset=[
+                    MEDICINE_ID_COLUMN,
+                    "Forecast_Date",
+                ],
+                keep=False,
+            )
         )
 
-        if duplicate_dates.any():
+        if duplicate_rows.any():
+
             raise ValueError(
                 "Production output contains duplicate "
                 "Medicine_ID + Forecast_Date combinations."
             )
 
-        # Chronos
+        # --------------------------------------------------------------------
+        # PREDICTED DEMAND
+        # --------------------------------------------------------------------
+
+        predicted = pd.to_numeric(
+            result_df[
+                "Predicted_Demand"
+            ],
+            errors="coerce",
+        )
+
+        if predicted.isna().any():
+
+            raise ValueError(
+                "Production output contains null or non-numeric "
+                "Predicted_Demand values."
+            )
+
+        predicted_array = predicted.to_numpy(
+            dtype=float
+        )
+
+        if not np.isfinite(
+            predicted_array
+        ).all():
+
+            raise ValueError(
+                "Production output contains non-finite "
+                "Predicted_Demand values."
+            )
+
+        if (
+            predicted_array < 0
+        ).any():
+
+            raise ValueError(
+                "Production output contains negative demand."
+            )
+
+        # --------------------------------------------------------------------
+        # ROUTING REASON
+        # --------------------------------------------------------------------
+
+        routing_reasons = (
+            result_df[
+                ROUTING_REASON_COLUMN
+            ]
+            .astype(str)
+            .str.strip()
+        )
+
+        if routing_reasons.eq(
+            ""
+        ).any():
+
+            raise ValueError(
+                "Production output contains empty Routing_Reason values."
+            )
+
+        # --------------------------------------------------------------------
+        # VALIDATION ADVANTAGE
+        # --------------------------------------------------------------------
+
+        advantages = pd.to_numeric(
+            result_df[
+                VALIDATION_ADVANTAGE_COLUMN
+            ],
+            errors="coerce",
+        )
+
+        finite_advantages = (
+            advantages.dropna()
+        )
+
+        if (
+            not finite_advantages.empty
+            and not np.isfinite(
+                finite_advantages.to_numpy(
+                    dtype=float
+                )
+            ).all()
+        ):
+
+            raise ValueError(
+                f"{VALIDATION_ADVANTAGE_COLUMN} contains "
+                "non-finite values."
+            )
+
+        # --------------------------------------------------------------------
+        # CHRONOS VALIDATION
+        # --------------------------------------------------------------------
+
         chronos = result_df[
-            result_df["Selected_Model"]
+            models
             == MODEL_CHRONOS
         ]
 
         if not chronos.empty:
 
-            quantiles = chronos[
-                ["P10", "P50", "P90"]
+            chronos_quantiles = chronos[
+                [
+                    "P10",
+                    "P50",
+                    "P90",
+                ]
             ].apply(
                 pd.to_numeric,
                 errors="coerce",
             )
 
-            if quantiles.isna().any().any():
+            if chronos_quantiles.isna().any().any():
+
                 raise ValueError(
                     "Chronos forecasts must contain numeric "
                     "P10, P50 and P90."
                 )
 
-            if not np.isfinite(
-                quantiles.to_numpy(dtype=float)
-            ).all():
-                raise ValueError(
-                    "Chronos forecasts contain "
-                    "non-finite quantiles."
+            quantile_array = (
+                chronos_quantiles.to_numpy(
+                    dtype=float
                 )
+            )
 
-            if (quantiles < 0).any().any():
+            if not np.isfinite(
+                quantile_array
+            ).all():
+
                 raise ValueError(
-                    "Chronos forecasts contain "
-                    "negative quantiles."
+                    "Chronos forecasts contain non-finite quantiles."
                 )
 
             if (
-                chronos["P10"]
-                > chronos["P50"]
+                quantile_array < 0
             ).any():
+
+                raise ValueError(
+                    "Chronos forecasts contain negative quantiles."
+                )
+
+            if (
+                chronos_quantiles[
+                    "P10"
+                ]
+                > chronos_quantiles[
+                    "P50"
+                ]
+            ).any():
+
                 raise ValueError(
                     "Chronos P10 exceeds P50."
                 )
 
             if (
-                chronos["P50"]
-                > chronos["P90"]
+                chronos_quantiles[
+                    "P50"
+                ]
+                > chronos_quantiles[
+                    "P90"
+                ]
             ).any():
+
                 raise ValueError(
                     "Chronos P50 exceeds P90."
                 )
 
-        # TSB
+            if not np.array_equal(
+                chronos[
+                    "Predicted_Demand"
+                ].to_numpy(
+                    dtype=float
+                ),
+                chronos[
+                    "P50"
+                ].to_numpy(
+                    dtype=float
+                ),
+            ):
+
+                raise ValueError(
+                    "Chronos production invariant violated: "
+                    "Predicted_Demand must equal P50 exactly."
+                )
+
+            chronos_advantages = pd.to_numeric(
+                chronos[
+                    VALIDATION_ADVANTAGE_COLUMN
+                ],
+                errors="coerce",
+            )
+
+            if chronos_advantages.isna().any():
+
+                raise ValueError(
+                    "Chronos production forecasts must contain "
+                    "finite validation advantage values."
+                )
+
+        # --------------------------------------------------------------------
+        # TSB VALIDATION
+        # --------------------------------------------------------------------
+
         tsb = result_df[
-            result_df["Selected_Model"]
+            models
             == MODEL_TSB
         ]
 
         if not tsb.empty:
 
             if tsb[
-                ["P10", "P50", "P90"]
+                [
+                    "P10",
+                    "P50",
+                    "P90",
+                ]
             ].notna().any().any():
 
                 raise ValueError(
@@ -1466,151 +2387,146 @@ class ProductionForecastService:
                     "P10/P50/P90 values."
                 )
 
-        # Horizon
+        # --------------------------------------------------------------------
+        # HORIZON
+        # --------------------------------------------------------------------
+
         horizon_counts = (
             result_df
-            .groupby(MEDICINE_ID_COLUMN)
+            .groupby(
+                MEDICINE_ID_COLUMN
+            )
             .size()
         )
 
-        invalid_horizon = (
+        invalid_horizons = (
             horizon_counts
-            != self.config.prediction_length
+            != int(
+                self.config.prediction_length
+            )
         )
 
-        if invalid_horizon.any():
-
-            bad = (
-                horizon_counts[
-                    invalid_horizon
-                ]
-                .to_dict()
-            )
+        if invalid_horizons.any():
 
             raise ValueError(
                 "Invalid forecast horizon for medicines: "
-                f"{bad}"
+                f"{horizon_counts[invalid_horizons].to_dict()}"
             )
 
-        # Prediction length
+        # --------------------------------------------------------------------
+        # PREDICTION LENGTH
+        # --------------------------------------------------------------------
+
         prediction_lengths = pd.to_numeric(
-            result_df["Prediction_Length"],
+            result_df[
+                "Prediction_Length"
+            ],
             errors="coerce",
         )
 
         if prediction_lengths.isna().any():
+
             raise ValueError(
                 "Prediction_Length contains invalid values."
             )
 
         if (
             prediction_lengths
-            != self.config.prediction_length
+            != int(
+                self.config.prediction_length
+            )
         ).any():
+
             raise ValueError(
                 "Production output contains unexpected "
                 "Prediction_Length values."
             )
 
-        # Context length
+        # --------------------------------------------------------------------
+        # CONTEXT LENGTH
+        # --------------------------------------------------------------------
+
         context_lengths = pd.to_numeric(
-            result_df["Context_Length_Used"],
+            result_df[
+                "Context_Length_Used"
+            ],
             errors="coerce",
         )
 
         if context_lengths.isna().any():
+
             raise ValueError(
                 "Context_Length_Used contains invalid values."
             )
 
-        if (context_lengths <= 0).any():
+        if (
+            context_lengths <= 0
+        ).any():
+
             raise ValueError(
                 "Context_Length_Used must be positive."
             )
 
-        # Routing advantage
-        advantages = pd.to_numeric(
-            result_df["Routing_Advantage_Pct"],
-            errors="coerce",
-        )
-
-        finite_advantages = advantages.dropna()
-
-        if not np.isfinite(
-            finite_advantages.to_numpy(dtype=float)
-        ).all():
-            raise ValueError(
-                "Routing_Advantage_Pct contains "
-                "non-finite values."
-            )
-
-        # Chronos routing consistency
-        chronos_advantages = pd.to_numeric(
-            chronos["Routing_Advantage_Pct"],
-            errors="coerce",
-        ).dropna()
-
-        if (
-            not chronos_advantages.empty
-            and (
-                chronos_advantages
-                < ROUTING_THRESHOLD_PCT
-            ).any()
-        ):
-            raise ValueError(
-                "Chronos production forecasts contain routing "
-                "advantages below the frozen "
-                f"{ROUTING_THRESHOLD_PCT:.0f}% threshold."
-            )
-
-        # TSB routing consistency
-        tsb_advantages = pd.to_numeric(
-            tsb["Routing_Advantage_Pct"],
-            errors="coerce",
-        ).dropna()
-
-        if (
-            not tsb_advantages.empty
-            and (
-                tsb_advantages
-                >= ROUTING_THRESHOLD_PCT
-            ).any()
-        ):
-            raise ValueError(
-                "TSB production forecasts contain routing "
-                "advantages at or above the frozen "
-                f"{ROUTING_THRESHOLD_PCT:.0f}% threshold."
-            )
-
 
 # ============================================================================
-# Smoke test
+# SMOKE TEST
 # ============================================================================
 
 def main() -> None:
 
     print("=" * 80)
-    print("PRODUCTION FORECAST SERVICE")
+    print(
+        "PRODUCTION FORECAST SERVICE"
+    )
     print("=" * 80)
 
     print()
-    print("ProductionForecastService import successful.")
-    print()
-
-    print("Frozen routing policy:")
     print(
-        "Chronos-2 P50 if validation advantage >= "
-        f"{ROUTING_THRESHOLD_PCT:.0f}%"
+        "ProductionForecastService import successful."
     )
-    print("Otherwise: TSB")
 
     print()
-    print("TSB parameters:")
-    print("alpha_demand=0.1")
-    print("alpha_probability=0.1")
+    print(
+        "Routing source of truth:"
+    )
+    print(
+        "production_routing_table.parquet"
+    )
 
     print()
-    print("Forecast configuration:")
+    print(
+        "Routing policy:"
+    )
+    print(
+        "Existing routing records are preserved exactly."
+    )
+    print(
+        "Missing routing record -> TSB fallback."
+    )
+
+    print()
+    print(
+        "Chronos invariant:"
+    )
+    print(
+        "Predicted_Demand == P50 exactly."
+    )
+
+    print()
+    print(
+        "TSB parameters:"
+    )
+    print(
+        "alpha_demand=0.1"
+    )
+    print(
+        "alpha_probability=0.1"
+    )
+
+    print()
+    print(
+        "Configuration:"
+    )
     print(
         f"prediction_length="
         f"{DEFAULT_CONFIG.prediction_length}"
@@ -1621,7 +2537,9 @@ def main() -> None:
     )
 
     print()
-    print("ProductionForecastService is ready.")
+    print(
+        "ProductionForecastService is ready."
+    )
 
 
 if __name__ == "__main__":

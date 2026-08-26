@@ -24,6 +24,16 @@ ROUTING_RULE_NAME = "validation_advantage_ge_30pct"
 
 VALIDATION_ADVANTAGE_THRESHOLD = 30.0
 
+# Explicit production fallback for medicines that were not eligible for,
+# or were absent from, the validation routing cohort. This is intentionally
+# deterministic and must never be confused with a validation-derived decision.
+UNVALIDATED_FALLBACK_MODEL = "tsb"
+UNVALIDATED_FALLBACK_RULE = "unvalidated_default_tsb"
+UNVALIDATED_FALLBACK_REASON = (
+    "No validation routing record available; "
+    "using deterministic TSB production fallback"
+)
+
 CHRONOS_MODEL = "chronos-2-P50"
 TSB_MODEL = "tsb"
 
@@ -717,6 +727,102 @@ class ProductionForecastRouter:
             reason=reason,
         )
 
+    @staticmethod
+    def _decision_from_routing_record(route: pd.Series,) -> RoutingDecision:
+
+        medicine_id = str(
+            route["Medicine_ID"]
+        ).strip()
+
+        if not medicine_id:
+            raise ValueError(
+                "Routing record contains empty Medicine_ID."
+            )
+
+        selected_model = str(
+            route["Selected_Model"]
+        ).strip()
+
+        if selected_model not in {
+            CHRONOS_MODEL,
+            TSB_MODEL,
+        }:
+            raise ValueError(
+                "Routing record contains invalid Selected_Model "
+                f"for medicine_id={medicine_id}: "
+                f"{selected_model}"
+            )
+
+        routing_rule = str(
+            route["Routing_Rule"]
+        ).strip()
+
+        if not routing_rule:
+            raise ValueError(
+                "Routing record contains empty Routing_Rule "
+                f"for medicine_id={medicine_id}."
+            )
+
+        reason = str(
+            route["Routing_Reason"]
+        ).strip()
+
+        if not reason:
+            raise ValueError(
+                "Routing record contains empty Routing_Reason "
+                f"for medicine_id={medicine_id}."
+            )
+
+        raw_advantage = route[
+            "Validation_Advantage_Pct"
+        ]
+
+        normalized_advantage: Optional[float]
+
+        if pd.isna(
+            raw_advantage
+        ):
+            normalized_advantage = None
+
+        else:
+            try:
+
+                value = float(
+                    raw_advantage
+                )
+
+            except (
+                TypeError,
+                ValueError,
+            ) as exc:
+
+                raise ValueError(
+                    "Routing record contains invalid "
+                    "Validation_Advantage_Pct "
+                    f"for medicine_id={medicine_id}: "
+                    f"{raw_advantage}"
+                ) from exc
+
+            if not np.isfinite(
+                value
+            ):
+                raise ValueError(
+                    "Routing record contains non-finite "
+                    "Validation_Advantage_Pct "
+                    f"for medicine_id={medicine_id}: "
+                    f"{raw_advantage}"
+                )
+
+            normalized_advantage = value
+
+        return RoutingDecision(
+            medicine_id=medicine_id,
+            selected_model=selected_model,
+            routing_rule=routing_rule,
+            validation_advantage_pct=normalized_advantage,
+            reason=reason,
+        )
+    
     # ========================================================================
     # VALIDATED TSB
     # ========================================================================
@@ -1390,120 +1496,107 @@ class ProductionForecastRouter:
     # ========================================================================
 
     @staticmethod
-    def _validate_routing_table(
-        routing_table: pd.DataFrame,
-    ) -> None:
-        """
-        Validate production routing-table structure.
-
-        Required:
-
-            Medicine_ID
-            Validation_Advantage_Pct
-        """
-
-        if not isinstance(
-            routing_table,
-            pd.DataFrame,
-        ):
+    def _validate_routing_table(routing_table: pd.DataFrame) -> None:
+        if not isinstance(routing_table,pd.DataFrame):
             raise TypeError(
-                "routing_table must be a pandas DataFrame."
-            )
+                "routing_table must be a pandas DataFrame.")
 
         required = {
             "Medicine_ID",
-            "Validation_Advantage_Pct",
-        }
+            "Selected_Model",
+            "Routing_Reason",
+            "Validation_Advantage_Pct"}
 
-        missing = (
-            required
-            - set(routing_table.columns)
-        )
+        missing = (required- set(routing_table.columns))
 
         if missing:
             raise ValueError(
-                "Routing table missing required columns: "
-                f"{sorted(missing)}"
-            )
-
+                "Routing table missing required columns: "f"{sorted(missing)}")
+                
         if routing_table.empty:
             raise ValueError(
-                "Routing table is empty."
-            )
+                "Routing table is empty.")
 
+        # --------------------------------------------------------------------
+        # Validate Medicine_ID
+        # --------------------------------------------------------------------
         normalized_ids = (
-            routing_table["Medicine_ID"]
-            .astype(str)
-            .str.strip()
-        )
+            routing_table["Medicine_ID"].astype(str).str.strip())
 
         if normalized_ids.eq("").any():
             raise ValueError(
-                "Routing table contains empty Medicine_ID values."
-            )
+                "Routing table contains empty Medicine_ID values.")
 
-        duplicate_mask = normalized_ids.duplicated(
-            keep=False
-        )
+        duplicate_mask = normalized_ids.duplicated(keep=False)
 
         if duplicate_mask.any():
-
-            duplicates = (
-                normalized_ids[
-                    duplicate_mask
-                ]
-                .unique()
-                .tolist()
-            )
-
+            duplicates = (normalized_ids[duplicate_mask].unique().tolist())
             raise ValueError(
                 "Routing table contains duplicate Medicine_ID values: "
-                f"{duplicates}"
-            )
+                f"{duplicates}")
 
-        raw_advantage = routing_table[
-            "Validation_Advantage_Pct"
-        ]
+        # --------------------------------------------------------------------
+        # Validate Selected_Model
+        # --------------------------------------------------------------------
+        
+        selected_models = (
+            routing_table["Selected_Model"].astype(str).str.strip())
+
+        if selected_models.eq("").any():
+            raise ValueError(
+                "Routing table contains empty Selected_Model values.")
+
+        allowed_models = {
+            CHRONOS_MODEL,
+            TSB_MODEL}
+
+        invalid_models = (set(selected_models.unique())- allowed_models)
+
+        if invalid_models:
+            raise ValueError(
+                "Routing table contains invalid Selected_Model values: "
+                f"{sorted(invalid_models)}")
+
+        # --------------------------------------------------------------------
+        # Validate Routing_Reason
+        # --------------------------------------------------------------------
+        routing_reasons = (
+            routing_table["Routing_Reason"]
+            .astype(str).str.strip())
+
+        if routing_reasons.eq("").any():
+            raise ValueError(
+                "Routing table contains empty Routing_Reason values.")
+
+        # --------------------------------------------------------------------
+        # Validate Validation_Advantage_Pct
+        # Missing advantage is allowed for medicines that were not part
+        # of the validation population. It must therefore not be treated
+        # # as an invalid routing record.
+        # --------------------------------------------------------------------
+        raw_advantage = (
+            routing_table["Validation_Advantage_Pct"])
 
         advantage = pd.to_numeric(
             raw_advantage,
-            errors="coerce",
-        )
+            errors="coerce",)
 
-        invalid_non_numeric = (
-            raw_advantage.notna()
-            & advantage.isna()
-        )
+        invalid_non_numeric = (raw_advantage.notna() & advantage.isna())
 
         if invalid_non_numeric.any():
-
-            invalid_values = (
-                raw_advantage.loc[
-                    invalid_non_numeric
-                ]
-                .astype(str)
-                .unique()
-                .tolist()
-            )
+            invalid_values = (raw_advantage.loc[invalid_non_numeric].unique().tolist())
 
             raise ValueError(
-                "Routing table contains non-numeric "
+                "Routing table contains invalid "
                 "Validation_Advantage_Pct values: "
-                f"{invalid_values}"
-            )
+                f"{invalid_values}")
 
-        invalid_finite = (
-            advantage.notna()
-            & ~np.isfinite(
-                advantage
-            )
-        )
+        invalid_finite = (advantage.notna() & ~np.isfinite(advantage))
 
         if invalid_finite.any():
             raise ValueError(
                 "Routing table contains non-finite "
-                "Validation_Advantage_Pct values."
-            )
+                "Validation_Advantage_Pct values.")
 
     # ========================================================================
     # BATCH FORECASTING
@@ -1583,16 +1676,9 @@ class ProductionForecastRouter:
                 route["Medicine_ID"]
             ).strip()
 
-            advantage = route[
-                "Validation_Advantage_Pct"
-            ]
-
             try:
 
-                decision = self.build_decision(
-                    medicine_id=medicine_id,
-                    validation_advantage_pct=advantage,
-                )
+                decision = self._decision_from_routing_record(route)
 
                 logger.info(
                     "BATCH ROUTING | medicine=%s | model=%s | "
@@ -2245,27 +2331,39 @@ class ProductionForecastRouter:
 
 def build_routing_table(
     robustness_df: pd.DataFrame,
+    all_medicine_ids: Optional[list[str]] = None,
 ) -> pd.DataFrame:
     """
-    Convert validation/robustness results into the production routing table.
+    Convert validation/robustness results into the frozen production routing table.
 
-    Expected columns:
+    Expected validation columns:
 
         Medicine_ID
         Validation_Chronos_AE
         Validation_TSB_AE
 
-    Important:
+    The validation metrics must be derived only from the validation stage.
+    Holdout/test results must never be used to populate this table.
 
-    The input dataframe must contain validation-derived metrics only.
+    Production coverage contract
+    ----------------------------
+    If ``all_medicine_ids`` is supplied, the returned table contains exactly one
+    routing record for every supplied medicine ID.
 
-    Do not populate these columns using holdout/test results.
+    Medicines with validation evidence use the frozen 30% advantage policy.
+
+    Medicines without a validation routing record are explicitly represented as:
+
+        Selected_Model              = "tsb"
+        Routing_Rule                = "unvalidated_default_tsb"
+        Routing_Reason              = explicit fallback provenance
+        Validation_Advantage_Pct    = NaN
+
+    This prevents silent missing-record behaviour while preserving the fact that
+    no validation-derived Chronos advantage exists for those medicines.
     """
 
-    if not isinstance(
-        robustness_df,
-        pd.DataFrame,
-    ):
+    if not isinstance(robustness_df, pd.DataFrame):
         raise TypeError(
             "robustness_df must be a pandas DataFrame."
         )
@@ -2276,10 +2374,7 @@ def build_routing_table(
         "Validation_TSB_AE",
     }
 
-    missing = (
-        required
-        - set(robustness_df.columns)
-    )
+    missing = required - set(robustness_df.columns)
 
     if missing:
         raise ValueError(
@@ -2300,36 +2395,20 @@ def build_routing_table(
         ]
     ].copy()
 
-    # ------------------------------------------------------------------------
-    # Normalize IDs.
-    # ------------------------------------------------------------------------
-
     routing["Medicine_ID"] = (
         routing["Medicine_ID"]
         .astype(str)
         .str.strip()
     )
 
-    if routing[
-        "Medicine_ID"
-    ].eq("").any():
+    if routing["Medicine_ID"].eq("").any():
         raise ValueError(
             "Robustness dataframe contains empty Medicine_ID values."
         )
 
-    # ------------------------------------------------------------------------
-    # Duplicate validation.
-    # ------------------------------------------------------------------------
-
-    duplicate_mask = (
-        routing["Medicine_ID"]
-        .duplicated(
-            keep=False
-        )
-    )
+    duplicate_mask = routing["Medicine_ID"].duplicated(keep=False)
 
     if duplicate_mask.any():
-
         duplicates = (
             routing.loc[
                 duplicate_mask,
@@ -2344,36 +2423,14 @@ def build_routing_table(
             f"{duplicates}"
         )
 
-    # ------------------------------------------------------------------------
-    # Numeric validation metrics.
-    # ------------------------------------------------------------------------
-
-    routing[
-        "Validation_Chronos_AE"
-    ] = pd.to_numeric(
-        routing[
-            "Validation_Chronos_AE"
-        ],
-        errors="coerce",
-    )
-
-    routing[
-        "Validation_TSB_AE"
-    ] = pd.to_numeric(
-        routing[
-            "Validation_TSB_AE"
-        ],
-        errors="coerce",
-    )
-
-    # ------------------------------------------------------------------------
-    # Validate AE values.
-    # ------------------------------------------------------------------------
-
     for column in (
         "Validation_Chronos_AE",
         "Validation_TSB_AE",
     ):
+        routing[column] = pd.to_numeric(
+            routing[column],
+            errors="coerce",
+        )
 
         values = routing[column]
 
@@ -2390,55 +2447,158 @@ def build_routing_table(
                 f"{column} contains negative or non-finite values."
             )
 
-    # ------------------------------------------------------------------------
-    # Calculate validation advantage.
-    #
-    # TSB AE == 0 is treated as undefined rather than allowing division
-    # by zero.
-    # ------------------------------------------------------------------------
+    routing["Validation_Advantage_Pct"] = np.nan
 
-    routing[
-        "Validation_Advantage_Pct"
+    valid_advantage_mask = (
+        routing["Validation_Chronos_AE"].notna()
+        & routing["Validation_TSB_AE"].notna()
+        & (routing["Validation_TSB_AE"] > 0)
+    )
+
+    routing.loc[
+        valid_advantage_mask,
+        "Validation_Advantage_Pct",
     ] = (
         (
-            routing[
-                "Validation_TSB_AE"
+            routing.loc[
+                valid_advantage_mask,
+                "Validation_TSB_AE",
             ]
-            - routing[
-                "Validation_Chronos_AE"
+            - routing.loc[
+                valid_advantage_mask,
+                "Validation_Chronos_AE",
             ]
         )
-        / routing[
-            "Validation_TSB_AE"
-        ].replace(
-            0,
-            np.nan,
-        )
+        / routing.loc[
+            valid_advantage_mask,
+            "Validation_TSB_AE",
+        ]
         * 100.0
     )
 
-    # ------------------------------------------------------------------------
-    # Apply frozen policy.
-    # ------------------------------------------------------------------------
-
-    routing[
-        "Selected_Model"
-    ] = (
-        routing[
-            "Validation_Advantage_Pct"
-        ]
+    routing["Selected_Model"] = (
+        routing["Validation_Advantage_Pct"]
         .apply(
             ProductionForecastRouter.select_model
         )
     )
 
-    routing[
-        "Routing_Rule"
-    ] = ROUTING_RULE_NAME
+    routing["Routing_Rule"] = ROUTING_RULE_NAME
 
-    routing[
-        "Threshold"
-    ] = VALIDATION_ADVANTAGE_THRESHOLD
+    routing["Routing_Reason"] = np.where(
+        routing["Selected_Model"].eq(CHRONOS_MODEL),
+        "validation_advantage_ge_30pct",
+        np.where(
+            routing["Validation_Advantage_Pct"].notna(),
+            "validation_advantage_lt_30pct",
+            "invalid_or_undefined_validation_advantage_default_tsb",
+        ),
+    )
+
+    routing["Threshold"] = VALIDATION_ADVANTAGE_THRESHOLD
+
+    # ------------------------------------------------------------------------
+    # Explicit coverage completion for the production medicine population.
+    # ------------------------------------------------------------------------
+
+    if all_medicine_ids is not None:
+
+        normalized_ids = (
+            pd.Series(
+                list(all_medicine_ids),
+                dtype="object",
+            )
+            .dropna()
+            .astype(str)
+            .str.strip()
+        )
+
+        if normalized_ids.eq("").any():
+            raise ValueError(
+                "all_medicine_ids contains empty medicine IDs."
+            )
+
+        duplicate_ids = (
+            normalized_ids[
+                normalized_ids.duplicated(
+                    keep=False
+                )
+            ]
+            .unique()
+            .tolist()
+        )
+
+        if duplicate_ids:
+            raise ValueError(
+                "all_medicine_ids contains duplicate medicine IDs: "
+                f"{duplicate_ids}"
+            )
+
+        existing_ids = set(
+            routing["Medicine_ID"].tolist()
+        )
+
+        missing_ids = [
+            medicine_id
+            for medicine_id in normalized_ids.tolist()
+            if medicine_id not in existing_ids
+        ]
+
+        if missing_ids:
+
+            fallback = pd.DataFrame(
+                {
+                    "Medicine_ID": missing_ids,
+                    "Validation_Chronos_AE": np.nan,
+                    "Validation_TSB_AE": np.nan,
+                    "Validation_Advantage_Pct": np.nan,
+                    "Selected_Model": UNVALIDATED_FALLBACK_MODEL,
+                    "Routing_Rule": UNVALIDATED_FALLBACK_RULE,
+                    "Routing_Reason": UNVALIDATED_FALLBACK_REASON,
+                    "Threshold": VALIDATION_ADVANTAGE_THRESHOLD,
+                }
+            )
+
+            routing = pd.concat(
+                [
+                    routing,
+                    fallback,
+                ],
+                ignore_index=True,
+            )
+
+    routing = (
+        routing
+        .sort_values("Medicine_ID")
+        .reset_index(drop=True)
+    )
+
+    if routing["Medicine_ID"].duplicated().any():
+        raise ValueError(
+            "Production routing table contains duplicate Medicine_ID values "
+            "after coverage completion."
+        )
+
+    if routing["Selected_Model"].isna().any():
+        raise ValueError(
+            "Production routing table contains null Selected_Model values."
+        )
+
+    allowed_models = {
+        CHRONOS_MODEL,
+        TSB_MODEL,
+    }
+
+    invalid_models = (
+        set(routing["Selected_Model"].astype(str))
+        - allowed_models
+    )
+
+    if invalid_models:
+        raise ValueError(
+            "Production routing table contains invalid Selected_Model values: "
+            f"{sorted(invalid_models)}"
+        )
 
     return routing
 
@@ -2540,7 +2700,7 @@ def main() -> None:
     )
 
     print(
-        "PASS: Missing/invalid validation advantage falls back to TSB."
+        "PASS: Missing validation evidence uses explicit deterministic TSB fallback."
     )
 
     print(

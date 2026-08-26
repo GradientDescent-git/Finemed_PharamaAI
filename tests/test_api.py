@@ -1,100 +1,232 @@
 from datetime import datetime
- 
+
 import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
- 
+
 import finemed_ai.api.main as api_main
 from finemed_ai.demand_forecasting.store import ForecastStore
- 
- 
+
+
 @pytest.fixture
 def client(tmp_path, monkeypatch):
-    rows = [{
-        "Medicine_ID": "42",
-        "Forecast_Date": pd.Timestamp("2025-06-01"),
-        "Predicted_Demand": 10.0,
 
-        "P10": 5.0,
-        "P20": 6.0,
-        "P30": 7.0,
-        "P40": 8.0,
-        "P50": 10.0,
-        "P60": 12.0,
-        "P70": 14.0,
-        "P80": 16.0,
-        "P90": 18.0,
+    rows = [
+        {
+            "Medicine_ID": "42",
+            "Forecast_Date": pd.Timestamp(
+                "2025-06-01"
+            ),
+            "Predicted_Demand": 10.0,
 
-        "Context_Length_Used": 730,
-        "Prediction_Length": 30,
-        "Model_ID": "amazon/chronos-2",
-        "Selected_Model": "chronos-2-P50",
+            "P10": 5.0,
+            "P20": 6.0,
+            "P30": 7.0,
+            "P40": 8.0,
+            "P50": 10.0,
+            "P60": 12.0,
+            "P70": 14.0,
+            "P80": 16.0,
+            "P90": 18.0,
 
-        "Generated_At": datetime.now()}]
+            "Context_Length_Used": 730,
+
+            # Must match the actual number of
+            # forecast rows for Medicine_ID 42.
+            "Prediction_Length": 1,
+
+            "Model_ID": "amazon/chronos-2",
+            "Selected_Model": "chronos-2-P50",
+
+            "Generated_At": datetime.now(),
+        }
+    ]
+
     output_dir = tmp_path / "forecasts"
-    output_dir.mkdir()
-    pd.DataFrame(rows).to_parquet(output_dir / "latest.parquet")
- 
-    api_main._store = ForecastStore(output_dir / "latest.parquet")
-    api_main._orchestrator = None  # simulate no ANTHROPIC_API_KEY configured
- 
-    monkeypatch.setenv("ADMIN_TOKEN", "test-secret")
-    api_main.ADMIN_TOKEN = "test-secret"
 
-    monkeypatch.setenv("CLIENT_API_KEY", "test-client-key")
-    api_main.CLIENT_API_KEY = "test-client-key"
- 
-    return TestClient(api_main.app, headers={"x-api-key": "test-client-key"})
- 
- 
+    output_dir.mkdir()
+
+    forecast_path = (
+        output_dir / "latest.parquet"
+    )
+
+    pd.DataFrame(
+        rows
+    ).to_parquet(
+        forecast_path,
+        index=False,
+    )
+
+    api_main._store = ForecastStore(
+        forecast_path
+    )
+
+    api_main._orchestrator = None
+
+    monkeypatch.setenv(
+        "ADMIN_TOKEN",
+        "test-secret",
+    )
+
+    api_main.ADMIN_TOKEN = (
+        "test-secret"
+    )
+
+    monkeypatch.setenv(
+        "CLIENT_API_KEY",
+        "test-client-key",
+    )
+
+    api_main.CLIENT_API_KEY = (
+        "test-client-key"
+    )
+
+    return TestClient(
+        api_main.app,
+        headers={
+            "x-api-key": (
+                "test-client-key"
+            ),
+        },
+    )
+
+
 def test_health(client):
-    resp = client.get("/health")
+
+    resp = client.get(
+        "/health"
+    )
+
     assert resp.status_code == 200
+
     body = resp.json()
+
     assert body["status"] == "ok"
-    assert body["medicines_available"] == 1
-    assert body["chat_available"] is False
- 
- 
+
+    assert (
+        body["medicines_available"]
+        == 1
+    )
+
+    assert (
+        body["chat_available"]
+        is False
+    )
+
+
 def test_get_forecast(client):
-    resp = client.get("/forecast/42")
+
+    resp = client.get(
+        "/forecast/42"
+    )
+
     assert resp.status_code == 200
-    assert resp.json()["medicine_id"] == "42"
- 
- 
-def test_get_forecast_404_for_unknown_medicine(client):
-    resp = client.get("/forecast/does-not-exist")
+
+    body = resp.json()
+
+    assert (
+        body["medicine_id"]
+        == "42"
+    )
+
+
+def test_get_forecast_404_for_unknown_medicine(
+    client,
+):
+
+    resp = client.get(
+        "/forecast/does-not-exist"
+    )
+
     assert resp.status_code == 404
- 
- 
+
+
 def test_forecast_summary(client):
-    resp = client.get("/forecast/42/summary")
+
+    resp = client.get(
+        "/forecast/42/summary"
+    )
+
     assert resp.status_code == 200
-    assert "trend" in resp.json()
- 
- 
-def test_chat_returns_503_without_orchestrator(client):
-    resp = client.post("/chat", json={"question": "how is medicine 42 looking?"})
+
+    body = resp.json()
+
+    assert "trend" in body
+
+
+def test_chat_returns_503_without_orchestrator(
+    client,
+):
+
+    resp = client.post(
+        "/chat",
+        json={
+            "question": (
+                "how is medicine 42 looking?"
+            )
+        },
+    )
+
     assert resp.status_code == 503
- 
- 
-def test_chat_works_with_mocked_orchestrator(client):
+
+
+def test_chat_works_with_mocked_orchestrator(
+    client,
+):
+
     class FakeOrchestrator:
-        def ask(self, question, history=None):
-            return f"Mocked answer to: {question}"
- 
-    api_main._orchestrator = FakeOrchestrator()
-    resp = client.post("/chat", json={"question": "how is medicine 42 looking?"})
+
+        def ask(
+            self,
+            question,
+            history=None,
+        ):
+
+            return (
+                f"Mocked answer to: {question}"
+            )
+
+    api_main._orchestrator = (
+        FakeOrchestrator()
+    )
+
+    resp = client.post(
+        "/chat",
+        json={
+            "question": (
+                "how is medicine 42 looking?"
+            )
+        },
+    )
+
     assert resp.status_code == 200
-    assert "Mocked answer" in resp.json()["answer"]
- 
- 
-def test_refresh_requires_admin_token(client):
-    resp = client.post("/refresh")
+
+    assert (
+        "Mocked answer"
+        in resp.json()["answer"]
+    )
+
+
+def test_refresh_requires_admin_token(
+    client,
+):
+
+    resp = client.post(
+        "/refresh"
+    )
+
     assert resp.status_code == 401
- 
- 
-def test_refresh_rejects_wrong_token(client):
-    resp = client.post("/refresh", headers={"x-admin-token": "wrong"})
+
+
+def test_refresh_rejects_wrong_token(
+    client,
+):
+
+    resp = client.post(
+        "/refresh",
+        headers={
+            "x-admin-token": "wrong",
+        },
+    )
+
     assert resp.status_code == 401
- 
