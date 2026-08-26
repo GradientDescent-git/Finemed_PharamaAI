@@ -1,293 +1,3458 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>FineMed Pharma AI</title>
-<style>
-  :root {
-    --bg: #0f1115;
-    --panel: #171a21;
-    --border: #262b36;
-    --text: #e8eaed;
-    --muted: #9aa3b2;
-    --accent: #4f8cff;
-    --accent-dim: #2a3f66;
-    --error: #ef5350;
-    --radius: 10px;
-  }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif;
-    background: var(--bg);
-    color: var(--text);
-    min-height: 100vh;
-  }
-  header {
-    padding: 20px 24px;
-    border-bottom: 1px solid var(--border);
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-  }
-  header h1 { font-size: 18px; margin: 0; font-weight: 600; }
-  header .status { font-size: 12px; color: var(--muted); }
-  header .status.ok { color: #66bb6a; }
-  header .status.bad { color: var(--error); }
+  <meta charset="UTF-8">
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1.0"
+  >
+  <meta name="theme-color" content="#171716">
+  <title>Finemed PharmaAI</title>
 
-  main {
-    max-width: 780px;
-    margin: 0 auto;
-    padding: 24px;
-  }
+  <style>
+    :root {
+      --bg: #171716;
+      --bg-2: #1b1b1a;
+      --panel: #20201f;
+      --panel-2: #242423;
+      --border: #343432;
+      --border-2: #41413e;
+      --text: #f2efe9;
+      --muted: #aaa79f;
+      --muted-2: #7e7c76;
+      --accent: #d97745;
+      --accent-2: #f09a67;
+      --green: #6bcf8a;
+      --red: #ef7979;
+      --yellow: #e1b968;
+      --radius: 16px;
+      --shadow: 0 18px 48px rgba(0, 0, 0, 0.22);
+    }
 
-  .keybar {
-    display: flex;
-    gap: 8px;
-    margin-bottom: 20px;
-  }
-  .keybar input {
-    flex: 1;
-    padding: 10px 12px;
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    color: var(--text);
-    font-size: 13px;
-  }
-  .keybar button {
-    padding: 10px 16px;
-    background: var(--accent);
-    border: none;
-    border-radius: var(--radius);
-    color: white;
-    font-size: 13px;
-    cursor: pointer;
-  }
+    * {
+      box-sizing: border-box;
+    }
 
-  .tabs { display: flex; gap: 4px; margin-bottom: 16px; }
-  .tabs button {
-    flex: 1;
-    padding: 10px;
-    background: var(--panel);
-    border: 1px solid var(--border);
-    color: var(--muted);
-    border-radius: var(--radius);
-    cursor: pointer;
-    font-size: 13px;
-  }
-  .tabs button.active { color: var(--text); border-color: var(--accent); background: var(--accent-dim); }
+    html,
+    body {
+      margin: 0;
+      min-height: 100%;
+      font-family:
+        Inter,
+        ui-sans-serif,
+        system-ui,
+        -apple-system,
+        BlinkMacSystemFont,
+        "Segoe UI",
+        sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
 
-  .panel {
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 20px;
-  }
-  .hidden { display: none; }
+    button,
+    input,
+    textarea,
+    select {
+      font: inherit;
+    }
 
-  #chat-log {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-    margin-bottom: 16px;
-    max-height: 420px;
-    overflow-y: auto;
-  }
-  .msg { padding: 10px 14px; border-radius: var(--radius); font-size: 14px; line-height: 1.5; max-width: 85%; }
-  .msg.user { align-self: flex-end; background: var(--accent-dim); }
-  .msg.assistant { align-self: flex-start; background: #1f232d; }
-  .msg.error { align-self: flex-start; background: #3a1f1f; color: #ffb4b0; }
+    button {
+      cursor: pointer;
+    }
 
-  .inputrow { display: flex; gap: 8px; }
-  .inputrow input {
-    flex: 1;
-    padding: 12px 14px;
-    background: #10131a;
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    color: var(--text);
-    font-size: 14px;
-  }
-  .inputrow button {
-    padding: 12px 18px;
-    background: var(--accent);
-    border: none;
-    border-radius: var(--radius);
-    color: white;
-    cursor: pointer;
-    font-size: 14px;
-  }
-  .inputrow button:disabled { opacity: 0.5; cursor: default; }
+    body {
+      overflow: hidden;
+    }
 
-  .hint { font-size: 12px; color: var(--muted); margin-top: 8px; }
+    .app {
+      height: 100vh;
+      display: flex;
+    }
 
-  table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 13px; }
-  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
-  th { color: var(--muted); font-weight: 500; }
+    /* =========================================================
+       SIDEBAR
+       ========================================================= */
 
-  .summary-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 16px; }
-  .stat { background: #10131a; border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; }
-  .stat .label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
-  .stat .value { font-size: 20px; font-weight: 600; margin-top: 4px; }
-  .trend-increasing { color: #66bb6a; }
-  .trend-decreasing { color: var(--error); }
-  .trend-stable, .trend-flat { color: var(--muted); }
-</style>
+    .sidebar {
+      width: 286px;
+      flex: 0 0 286px;
+      border-right: 1px solid #2e2e2c;
+      background: #141413;
+      display: flex;
+      flex-direction: column;
+      padding: 18px 14px 12px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 10px 18px;
+    }
+
+    .mark {
+      width: 30px;
+      height: 30px;
+      border-radius: 10px;
+      background: linear-gradient(
+        135deg,
+        var(--accent),
+        #b55b34
+      );
+      display: grid;
+      place-items: center;
+      font-weight: 800;
+      color: #21140e;
+      box-shadow:
+        0 8px 22px rgba(217, 119, 69, 0.18);
+    }
+
+    .brand-title {
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+
+    .brand-sub {
+      font-size: 11px;
+      color: var(--muted-2);
+      margin-top: 2px;
+    }
+
+    .new-chat {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      width: 100%;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--text);
+      padding: 12px 14px;
+      border-radius: 12px;
+      margin-bottom: 12px;
+    }
+
+    .new-chat:hover {
+      background: #1b1b1a;
+      border-color: var(--border-2);
+    }
+
+    .plus {
+      font-size: 20px;
+      line-height: 1;
+    }
+
+    .nav {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .nav button {
+      display: flex;
+      align-items: center;
+      gap: 11px;
+      width: 100%;
+      padding: 11px 12px;
+      border: 1px solid transparent;
+      background: transparent;
+      color: var(--muted);
+      border-radius: 10px;
+      text-align: left;
+    }
+
+    .nav button:hover {
+      background: #1c1c1b;
+      color: var(--text);
+    }
+
+    .nav button.active {
+      background: #282827;
+      color: var(--text);
+      border-color: #363634;
+    }
+
+    .icon {
+      width: 17px;
+      text-align: center;
+      color: #b8b4ab;
+    }
+
+    .recent {
+      margin-top: 18px;
+      overflow: hidden;
+      flex: 1;
+    }
+
+    .recent-title {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted-2);
+      padding: 0 10px 8px;
+    }
+
+    .recent-item {
+      padding: 9px 10px;
+      color: #c6c3bb;
+      font-size: 12px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      border-radius: 8px;
+    }
+
+    .recent-item:hover {
+      background: #1b1b1a;
+    }
+
+    .profile {
+      border-top: 1px solid var(--border);
+      padding: 14px 8px 4px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .avatar {
+      width: 34px;
+      height: 34px;
+      border-radius: 50%;
+      background: #a85f3e;
+      display: grid;
+      place-items: center;
+      font-weight: 700;
+    }
+
+    .profile-main {
+      min-width: 0;
+      flex: 1;
+    }
+
+    .profile-name {
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    .profile-sub {
+      font-size: 10px;
+      color: var(--muted-2);
+      margin-top: 2px;
+    }
+
+    /* =========================================================
+       MAIN
+       ========================================================= */
+
+    .main {
+      min-width: 0;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      background:
+        linear-gradient(
+          180deg,
+          #191918,
+          #171716
+        );
+    }
+
+    .topbar {
+      height: 62px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 22px;
+      border-bottom: 1px solid #2d2d2a;
+      flex: 0 0 62px;
+    }
+
+    .top-title {
+      font-size: 15px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 7px;
+    }
+
+    .top-title span {
+      color: var(--muted-2);
+      font-size: 12px;
+    }
+
+    .status {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--yellow);
+    }
+
+    .status.ok {
+      color: #b6e6c2;
+    }
+
+    .status.ok .dot {
+      background: var(--green);
+    }
+
+    .status.bad {
+      color: #f2b0b0;
+    }
+
+    .status.bad .dot {
+      background: var(--red);
+    }
+
+    .content {
+      flex: 1;
+      min-height: 0;
+      overflow: auto;
+    }
+
+    .page {
+      display: none;
+      min-height: 100%;
+      padding: 28px 30px 50px;
+    }
+
+    .page.active {
+      display: block;
+    }
+
+    .center {
+      max-width: 1100px;
+      margin: 0 auto;
+    }
+
+    /* =========================================================
+       ASSISTANT
+       ========================================================= */
+
+    .assistant {
+      max-width: 920px;
+      margin: 0 auto;
+      min-height: calc(100vh - 62px);
+    }
+
+    .hero {
+      max-width: 920px;
+      margin: 120px auto 0;
+      text-align: center;
+      padding-top: 20px;
+    }
+
+    .spark {
+      width: 44px;
+      height: 44px;
+      margin: 0 auto 20px;
+      border-radius: 14px;
+      background: linear-gradient(
+        135deg,
+        #d9794a,
+        #be5b36
+      );
+      display: grid;
+      place-items: center;
+      box-shadow:
+        0 12px 30px rgba(217, 119, 69, 0.2);
+    }
+
+    .spark::before {
+      content: "✦";
+      font-size: 24px;
+      color: #25150e;
+    }
+
+    .hero h1 {
+      font-family:
+        Georgia,
+        "Times New Roman",
+        serif;
+      font-size: 42px;
+      line-height: 1.1;
+      font-weight: 500;
+      margin: 0 0 10px;
+      letter-spacing: -0.03em;
+    }
+
+    .hero p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 16px;
+    }
+
+    .composer-wrap {
+      max-width: 920px;
+      margin: 34px auto 0;
+    }
+
+    .composer {
+      background: #232322;
+      border: 1px solid #3c3c39;
+      border-radius: 18px;
+      box-shadow: var(--shadow);
+      padding: 14px;
+    }
+
+    .composer textarea {
+      width: 100%;
+      min-height: 90px;
+      resize: none;
+      border: 0;
+      outline: 0;
+      background: transparent;
+      color: var(--text);
+      font-size: 16px;
+      line-height: 1.5;
+    }
+
+    .composer textarea::placeholder {
+      color: #807e77;
+    }
+
+    .composer-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-top: 8px;
+    }
+
+    .composer-left,
+    .composer-right {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .tool {
+      padding: 8px 11px;
+      border: 1px solid var(--border);
+      background: #292927;
+      color: #c6c3bb;
+      border-radius: 10px;
+      font-size: 12px;
+    }
+
+    .tool:hover {
+      border-color: var(--border-2);
+      color: var(--text);
+    }
+
+    .send {
+      width: 38px;
+      height: 38px;
+      border: 0;
+      border-radius: 11px;
+      background: var(--accent);
+      color: #25150e;
+      font-weight: 800;
+    }
+
+    .send:hover {
+      background: var(--accent-2);
+    }
+
+    .send:disabled {
+      opacity: 0.45;
+      cursor: default;
+    }
+
+    .quick-grid {
+      max-width: 920px;
+      margin: 15px auto 0;
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 10px;
+    }
+
+    .quick {
+      padding: 13px 14px;
+      border: 1px solid var(--border);
+      background: #1d1d1c;
+      color: #d0cdc5;
+      text-align: left;
+      border-radius: 12px;
+    }
+
+    .quick:hover {
+      background: #242423;
+      border-color: var(--border-2);
+    }
+
+    .quick-title {
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    .quick-sub {
+      font-size: 10px;
+      color: var(--muted-2);
+      margin-top: 3px;
+    }
+
+    .chat-log {
+      padding: 32px 0 120px;
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+    }
+
+    .msg {
+      max-width: 82%;
+      white-space: pre-wrap;
+      line-height: 1.65;
+      font-size: 15px;
+    }
+
+    .msg.user {
+      align-self: flex-end;
+      background: #2a2a28;
+      padding: 11px 14px;
+      border: 1px solid #3b3b38;
+      border-radius: 14px;
+    }
+
+    .msg.assistant {
+      align-self: flex-start;
+      padding: 6px 0;
+      color: #ece9e2;
+    }
+
+    .msg.error {
+      align-self: flex-start;
+      color: #ffc0c0;
+      background: #321c1c;
+      padding: 10px 12px;
+      border: 1px solid #5e3030;
+      border-radius: 12px;
+    }
+
+    /* =========================================================
+       PANELS / CARDS
+       ========================================================= */
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      padding: 20px;
+      box-shadow:
+        0 10px 30px rgba(0, 0, 0, 0.15);
+    }
+
+    .panel-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 14px;
+      margin-bottom: 15px;
+    }
+
+    .panel-title {
+      font-size: 16px;
+      font-weight: 650;
+    }
+
+    .panel-sub {
+      font-size: 11px;
+      color: var(--muted);
+      margin-top: 4px;
+    }
+
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+
+    .stat {
+      background: #1b1b1a;
+      border: 1px solid var(--border);
+      padding: 15px;
+      border-radius: 14px;
+    }
+
+    .stat-label {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted-2);
+    }
+
+    .stat-value {
+      font-size: 24px;
+      font-weight: 700;
+      margin-top: 7px;
+      letter-spacing: -0.02em;
+    }
+
+    .stat-sub {
+      font-size: 10px;
+      color: var(--muted-2);
+      margin-top: 4px;
+    }
+
+    .grid2 {
+      display: grid;
+      grid-template-columns: 1.3fr 1fr;
+      gap: 14px;
+    }
+
+    .mini-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 9px;
+      margin: 14px 0;
+    }
+
+    .mini {
+      background: #1a1a19;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 11px;
+    }
+
+    .mini-l {
+      font-size: 9px;
+      color: var(--muted-2);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    .mini-v {
+      margin-top: 4px;
+      font-size: 15px;
+      font-weight: 650;
+    }
+
+    /* =========================================================
+       FORMS
+       ========================================================= */
+
+    .toolbar {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .input {
+      background: #1a1a19;
+      color: var(--text);
+      border: 1px solid var(--border);
+      outline: none;
+      border-radius: 11px;
+      padding: 10px 12px;
+    }
+
+    .input:focus {
+      border-color: #5b5a55;
+    }
+
+    .input.grow {
+      flex: 1;
+      min-width: 220px;
+    }
+
+    .btn {
+      border: 1px solid transparent;
+      background: var(--accent);
+      color: #24140e;
+      border-radius: 10px;
+      padding: 10px 14px;
+      font-weight: 700;
+    }
+
+    .btn:hover {
+      background: var(--accent-2);
+    }
+
+    .btn.secondary {
+      background: #252524;
+      border-color: var(--border);
+      color: #e6e2d9;
+    }
+
+    .btn.secondary:hover {
+      border-color: var(--border-2);
+    }
+
+    /* =========================================================
+       TABLES
+       ========================================================= */
+
+    .table-wrap {
+      overflow: auto;
+    }
+
+    .table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+
+    .table th,
+    .table td {
+      text-align: left;
+      padding: 10px;
+      border-bottom: 1px solid #30302e;
+    }
+
+    .table th {
+      font-size: 10px;
+      color: var(--muted-2);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    .table tbody tr:hover td {
+      background: #242422;
+    }
+
+    .badge {
+      display: inline-flex;
+      padding: 4px 7px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      font-size: 10px;
+      color: #c8c5bc;
+      background: #1a1a19;
+    }
+
+    .badge.green {
+      color: #bce7c6;
+      border-color: #2d5d3a;
+      background: #18301f;
+    }
+
+    .badge.orange {
+      color: #ffd2bf;
+      border-color: #6a3f2e;
+      background: #2e211c;
+    }
+
+    /* =========================================================
+       CHART / FORECAST
+       ========================================================= */
+
+    .chart {
+      height: 240px;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      background: #1a1a19;
+      padding: 8px;
+    }
+
+    .chart svg {
+      width: 100%;
+      height: 100%;
+    }
+
+    /* =========================================================
+       SETTINGS
+       ========================================================= */
+
+    .notice {
+      padding: 12px 14px;
+      border: 1px solid var(--border);
+      background: #1c1c1b;
+      border-radius: 11px;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.5;
+    }
+
+    .notice strong {
+      color: var(--text);
+    }
+
+    /* =========================================================
+       EMPTY / TOAST
+       ========================================================= */
+
+    .empty {
+      text-align: center;
+      padding: 30px;
+      color: var(--muted-2);
+      font-size: 12px;
+    }
+
+    .toast {
+      position: fixed;
+      right: 20px;
+      bottom: 20px;
+      background: #282826;
+      border: 1px solid var(--border-2);
+      padding: 11px 13px;
+      border-radius: 10px;
+      color: var(--text);
+      font-size: 11px;
+      display: none;
+      box-shadow: var(--shadow);
+      z-index: 50;
+    }
+
+    /* =========================================================
+       RESPONSIVE
+       ========================================================= */
+
+    @media (max-width: 1050px) {
+      .sidebar {
+        width: 220px;
+        flex-basis: 220px;
+      }
+
+      .quick-grid {
+        grid-template-columns: repeat(2, 1fr);
+      }
+
+      .stats {
+        grid-template-columns: repeat(2, 1fr);
+      }
+
+      .grid2 {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 760px) {
+      body {
+        overflow: auto;
+      }
+
+      .app {
+        display: block;
+        height: auto;
+      }
+
+      .sidebar {
+        width: 100%;
+        position: static;
+        height: auto;
+        border-right: 0;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .recent {
+        display: none;
+      }
+
+      .profile {
+        display: none;
+      }
+
+      .main {
+        min-height: 100vh;
+      }
+
+      .page {
+        padding: 18px;
+      }
+
+      .hero {
+        margin-top: 60px;
+        padding-top: 10px;
+      }
+
+      .hero h1 {
+        font-size: 32px;
+      }
+
+      .quick-grid {
+        grid-template-columns: 1fr 1fr;
+      }
+
+      .stats {
+        grid-template-columns: 1fr 1fr;
+      }
+
+      .mini-grid {
+        grid-template-columns: 1fr 1fr;
+      }
+
+      .topbar {
+        padding: 0 14px;
+      }
+    }
+  </style>
 </head>
+
 <body>
 
-<header>
-  <h1>FineMed Pharma AI</h1>
-  <span id="status" class="status">checking...</span>
-</header>
+<div class="app">
 
-<main>
-  <div class="keybar">
-    <input id="api-key" type="password" placeholder="API key">
-    <button onclick="saveKey()">Save</button>
-  </div>
+  <!-- =======================================================
+       SIDEBAR
+       ======================================================= -->
 
-  <div class="tabs">
-    <button class="active" onclick="showTab('chat')">Ask a question</button>
-    <button onclick="showTab('lookup')">Look up a medicine</button>
-  </div>
+  <aside class="sidebar">
 
-  <div id="tab-chat" class="panel">
-    <div id="chat-log"></div>
-    <div class="inputrow">
-      <input id="chat-input" type="text" placeholder="e.g. how is medicine 42 trending?" onkeydown="if(event.key==='Enter') sendChat()">
-      <button id="chat-send" onclick="sendChat()">Ask</button>
+    <div class="brand">
+
+      <div class="mark">
+        F
+      </div>
+
+      <div>
+        <div class="brand-title">
+          Finemed PharmaAI
+        </div>
+
+        <div class="brand-sub">
+          Demand Intelligence
+        </div>
+      </div>
+
     </div>
-    <div class="hint">Ask about any medicine by its code, e.g. "what's the forecast for 0042?" or "is demand for 0110 going up or down?"</div>
-  </div>
 
-  <div id="tab-lookup" class="panel hidden">
-    <div class="inputrow">
-      <input id="lookup-input" type="text" placeholder="Medicine code, e.g. 0042" onkeydown="if(event.key==='Enter') lookupForecast()">
-      <button onclick="lookupForecast()">Look up</button>
+    <button
+      class="new-chat"
+      onclick="newChat()"
+    >
+      <span class="plus">+</span>
+      <span>New conversation</span>
+    </button>
+
+    <nav class="nav">
+
+      <button
+        class="active"
+        data-page="assistant"
+        onclick="showPage('assistant')"
+      >
+        <span class="icon">◉</span>
+        Assistant
+      </button>
+
+      <button
+        data-page="overview"
+        onclick="showPage('overview')"
+      >
+        <span class="icon">◫</span>
+        Overview
+      </button>
+
+      <button
+        data-page="forecast"
+        onclick="showPage('forecast')"
+      >
+        <span class="icon">↗</span>
+        Forecasts
+      </button>
+
+      <button
+        data-page="rankings"
+        onclick="showPage('rankings')"
+      >
+        <span class="icon">≡</span>
+        Demand rankings
+      </button>
+
+      <button
+        data-page="operations"
+        onclick="showPage('operations')"
+      >
+        <span class="icon">◌</span>
+        Operations
+      </button>
+
+      <button
+        data-page="settings"
+        onclick="showPage('settings')"
+      >
+        <span class="icon">⚙</span>
+        Settings
+      </button>
+
+    </nav>
+
+    <div class="recent">
+
+      <div class="recent-title">
+        Recent
+      </div>
+
+      <div class="recent-item">
+        Otacare forecast review
+      </div>
+
+      <div class="recent-item">
+        Top medicines by demand
+      </div>
+
+      <div class="recent-item">
+        Model routing analysis
+      </div>
+
+      <div class="recent-item">
+        Production forecast summary
+      </div>
+
     </div>
-    <div id="lookup-result"></div>
-  </div>
-</main>
+
+    <div class="profile">
+
+      <div class="avatar">
+        F
+      </div>
+
+      <div class="profile-main">
+
+        <div class="profile-name">
+          Finemed workspace
+        </div>
+
+        <div class="profile-sub">
+          Production environment
+        </div>
+
+      </div>
+
+    </div>
+
+  </aside>
+
+  <!-- =======================================================
+       MAIN
+       ======================================================= -->
+
+  <section class="main">
+
+    <header class="topbar">
+
+      <div
+        id="top-title"
+        class="top-title"
+      >
+        Finemed PharmaAI
+        <span>· Assistant</span>
+      </div>
+
+      <div
+        id="status"
+        class="status"
+      >
+        <span class="dot"></span>
+        Checking production service
+      </div>
+
+    </header>
+
+    <div class="content">
+
+      <!-- ===================================================
+           ASSISTANT
+           =================================================== -->
+
+      <section
+        id="page-assistant"
+        class="page active"
+      >
+
+        <div class="assistant">
+
+          <div
+            id="chat-log"
+            class="chat-log"
+          ></div>
+
+        </div>
+
+      </section>
+
+      <!-- ===================================================
+           OVERVIEW
+           =================================================== -->
+
+      <section
+        id="page-overview"
+        class="page"
+      >
+
+        <div class="center">
+
+          <div class="panel-header">
+
+            <div>
+
+              <div class="panel-title">
+                Production overview
+              </div>
+
+              <div class="panel-sub">
+                Current forecast state from the live API.
+              </div>
+
+            </div>
+
+            <button
+              class="btn secondary"
+              onclick="loadOverview()"
+            >
+              Refresh
+            </button>
+
+          </div>
+
+          <div class="stats">
+
+            <div class="stat">
+
+              <div class="stat-label">
+                Medicines
+              </div>
+
+              <div
+                id="ov-medicines"
+                class="stat-value"
+              >
+                —
+              </div>
+
+              <div class="stat-sub">
+                production coverage
+              </div>
+
+            </div>
+
+            <div class="stat">
+
+              <div class="stat-label">
+                Forecast horizon
+              </div>
+
+              <div
+                id="ov-days"
+                class="stat-value"
+              >
+                —
+              </div>
+
+              <div class="stat-sub">
+                days
+              </div>
+
+            </div>
+
+            <div class="stat">
+
+              <div class="stat-label">
+                Total demand
+              </div>
+
+              <div
+                id="ov-total"
+                class="stat-value"
+              >
+                —
+              </div>
+
+              <div class="stat-sub">
+                predicted units
+              </div>
+
+            </div>
+
+            <div class="stat">
+
+              <div class="stat-label">
+                Daily average
+              </div>
+
+              <div
+                id="ov-daily"
+                class="stat-value"
+              >
+                —
+              </div>
+
+              <div class="stat-sub">
+                predicted units/day
+              </div>
+
+            </div>
+
+          </div>
+
+          <div class="grid2">
+
+            <div class="panel">
+
+              <div class="panel-title">
+                Forecast window
+              </div>
+
+              <div class="mini-grid">
+
+                <div class="mini">
+
+                  <div class="mini-l">
+                    Start
+                  </div>
+
+                  <div
+                    id="ov-start"
+                    class="mini-v"
+                  >
+                    —
+                  </div>
+
+                </div>
+
+                <div class="mini">
+
+                  <div class="mini-l">
+                    End
+                  </div>
+
+                  <div
+                    id="ov-end"
+                    class="mini-v"
+                  >
+                    —
+                  </div>
+
+                </div>
+
+                <div class="mini">
+
+                  <div class="mini-l">
+                    Store
+                  </div>
+
+                  <div
+                    id="ov-store"
+                    class="mini-v"
+                  >
+                    —
+                  </div>
+
+                </div>
+
+                <div class="mini">
+
+                  <div class="mini-l">
+                    Chat
+                  </div>
+
+                  <div
+                    id="ov-chat"
+                    class="mini-v"
+                  >
+                    —
+                  </div>
+
+                </div>
+
+              </div>
+
+            </div>
+
+            <div class="panel">
+
+              <div class="panel-title">
+                Model distribution
+              </div>
+
+              <div
+                id="ov-models"
+                class="table-wrap"
+              >
+                <div class="empty">
+                  Loading…
+                </div>
+              </div>
+
+            </div>
+
+          </div>
+
+          <div style="height:14px"></div>
+
+          <div class="panel">
+
+            <div class="panel-title">
+              Highest predicted demand
+            </div>
+
+            <div
+              id="ov-top"
+              class="table-wrap"
+            >
+              <div class="empty">
+                Loading…
+              </div>
+            </div>
+
+          </div>
+
+        </div>
+
+      </section>
+
+      <!-- ===================================================
+           FORECAST
+           =================================================== -->
+
+      <section
+        id="page-forecast"
+        class="page"
+      >
+
+        <div class="center">
+
+          <div class="panel">
+
+            <div class="panel-header">
+
+              <div>
+
+                <div class="panel-title">
+                  Medicine forecast
+                </div>
+
+                <div class="panel-sub">
+                  Inspect one production forecast in detail.
+                </div>
+
+              </div>
+
+            </div>
+
+            <div class="toolbar">
+
+              <input
+                id="forecast-id"
+                class="input grow"
+                placeholder="Medicine code, e.g. 0001"
+                onkeydown="
+                  if(event.key === 'Enter')
+                    loadForecast()
+                "
+              >
+
+              <button
+                class="btn"
+                onclick="loadForecast()"
+              >
+                Open forecast
+              </button>
+
+            </div>
+
+          </div>
+
+          <div style="height:14px"></div>
+
+          <div
+            id="forecast-view"
+            class="panel"
+          >
+
+            <div class="empty">
+              Enter a medicine code to begin.
+            </div>
+
+          </div>
+
+        </div>
+
+      </section>
+
+      <!-- ===================================================
+           RANKINGS
+           =================================================== -->
+
+      <section
+        id="page-rankings"
+        class="page"
+      >
+
+        <div class="center">
+
+          <div class="grid2">
+
+            <div class="panel">
+
+              <div class="panel-header">
+
+                <div>
+
+                  <div class="panel-title">
+                    Highest demand
+                  </div>
+
+                  <div class="panel-sub">
+                    Current production ranking.
+                  </div>
+
+                </div>
+
+                <button
+                  class="btn secondary"
+                  onclick="loadTop()"
+                >
+                  Refresh
+                </button>
+
+              </div>
+
+              <div id="top-table">
+
+                <div class="empty">
+                  Loading…
+                </div>
+
+              </div>
+
+            </div>
+
+            <div class="panel">
+
+              <div class="panel-header">
+
+                <div>
+
+                  <div class="panel-title">
+                    Lowest demand
+                  </div>
+
+                  <div class="panel-sub">
+                    Grounded by the conversation ranking service.
+                  </div>
+
+                </div>
+
+                <button
+                  class="btn secondary"
+                  onclick="loadBottom()"
+                >
+                  Refresh
+                </button>
+
+              </div>
+
+              <div id="bottom-table">
+
+                <div class="empty">
+                  Loading…
+                </div>
+
+              </div>
+
+            </div>
+
+          </div>
+
+        </div>
+
+      </section>
+
+      <!-- ===================================================
+           OPERATIONS
+           =================================================== -->
+
+      <section
+        id="page-operations"
+        class="page"
+      >
+
+        <div class="center">
+
+          <div class="stats">
+
+            <div class="stat">
+
+              <div class="stat-label">
+                API
+              </div>
+
+              <div
+                id="op-api"
+                class="stat-value"
+              >
+                —
+              </div>
+
+            </div>
+
+            <div class="stat">
+
+              <div class="stat-label">
+                Forecast store
+              </div>
+
+              <div
+                id="op-store"
+                class="stat-value"
+              >
+                —
+              </div>
+
+            </div>
+
+            <div class="stat">
+
+              <div class="stat-label">
+                Conversation
+              </div>
+
+              <div
+                id="op-chat"
+                class="stat-value"
+              >
+                —
+              </div>
+
+            </div>
+
+            <div class="stat">
+
+              <div class="stat-label">
+                Medicines
+              </div>
+
+              <div
+                id="op-count"
+                class="stat-value"
+              >
+                —
+              </div>
+
+            </div>
+
+          </div>
+
+          <div class="panel">
+
+            <div class="panel-title">
+              Runtime
+            </div>
+
+            <div style="height:10px"></div>
+
+            <div class="notice">
+
+              <strong>Container:</strong>
+              FastAPI service running behind Docker.
+
+              The UI reads facts from the production
+              API and does not calculate forecast logic
+              in the browser.
+
+            </div>
+
+          </div>
+
+        </div>
+
+      </section>
+
+      <!-- ===================================================
+           SETTINGS
+           =================================================== -->
+
+      <section
+        id="page-settings"
+        class="page"
+      >
+
+        <div class="center">
+
+          <div class="panel">
+
+            <div class="panel-header">
+
+              <div>
+
+                <div class="panel-title">
+                  Settings
+                </div>
+
+                <div class="panel-sub">
+                  Configure access to the Finemed production API.
+                </div>
+
+              </div>
+
+            </div>
+
+            <div class="panel">
+
+              <div class="panel-title">
+                API Access
+              </div>
+
+              <div class="panel-sub">
+                The browser sends this key using the
+                X-API-Key request header.
+              </div>
+
+              <div style="height:14px"></div>
+
+              <div class="toolbar">
+
+                <input
+                  id="settings-api-key"
+                  class="input grow"
+                  type="password"
+                  placeholder="Enter CLIENT_API_KEY"
+                  autocomplete="off"
+                >
+
+                <button
+                  id="settings-toggle-key"
+                  class="btn secondary"
+                  type="button"
+                  onclick="toggleApiKeyVisibility(this)"
+                >
+                  Show
+                </button>
+
+                <button
+                  class="btn"
+                  type="button"
+                  onclick="saveSettingsApiKey()"
+                >
+                  Save
+                </button>
+
+                <button
+                  class="btn secondary"
+                  type="button"
+                  onclick="testApiConnection()"
+                >
+                  Test connection
+                </button>
+
+              </div>
+
+              <div
+                id="settings-api-status"
+                class="notice"
+                style="margin-top:14px"
+              >
+                No API key configured.
+              </div>
+
+            </div>
+
+            <div style="height:14px"></div>
+
+            <div class="panel">
+
+              <div class="panel-title">
+                Session
+              </div>
+
+              <div style="height:10px"></div>
+
+              <div class="notice">
+
+                Current conversation session:
+
+                <strong id="settings-session-id">
+                  —
+                </strong>
+
+              </div>
+
+              <div style="height:10px"></div>
+
+              <button
+                class="btn secondary"
+                type="button"
+                onclick="newChat()"
+              >
+                Start new conversation
+              </button>
+
+            </div>
+
+            <div style="height:14px"></div>
+
+            <div class="panel">
+
+              <div class="panel-title">
+                Production connection
+              </div>
+
+              <div style="height:10px"></div>
+
+              <div
+                id="settings-health"
+                class="notice"
+              >
+                Checking production service…
+              </div>
+
+            </div>
+
+          </div>
+
+        </div>
+
+      </section>
+
+    </div>
+
+  </section>
+
+</div>
+
+<div
+  id="toast"
+  class="toast"
+></div>
 
 <script>
-const API_BASE = ""; // same-origin, served by the same FastAPI app
+  /* =========================================================
+     APPLICATION STATE
+     ========================================================= */
 
-function getKey() { return localStorage.getItem("finemed_api_key") || ""; }
-function saveKey() {
-  const key = document.getElementById("api-key").value.trim();
-  if (key) { localStorage.setItem("finemed_api_key", key); checkHealth(); }
-}
+  const state = {
+    page: "assistant",
+    sessionId:
+      localStorage.getItem("finemed_session_id")
+      || crypto.randomUUID(),
+    busy: false
+  };
 
-function showTab(name) {
-  document.getElementById("tab-chat").classList.toggle("hidden", name !== "chat");
-  document.getElementById("tab-lookup").classList.toggle("hidden", name !== "lookup");
-  document.querySelectorAll(".tabs button").forEach(b => b.classList.remove("active"));
-  event.target.classList.add("active");
-}
+  localStorage.setItem(
+    "finemed_session_id",
+    state.sessionId
+  );
 
-async function checkHealth() {
-  const el = document.getElementById("status");
-  try {
-    const res = await fetch(`${API_BASE}/health`);
-    const data = await res.json();
-    el.textContent = `${data.medicines_available} medicines loaded · chat ${data.chat_available ? "available" : "unavailable"}`;
-    el.className = "status " + (data.status === "ok" ? "ok" : "bad");
-  } catch (e) {
-    el.textContent = "cannot reach server";
-    el.className = "status bad";
+  /* =========================================================
+     HELPERS
+     ========================================================= */
+
+  const $ = (id) =>
+    document.getElementById(id);
+
+  function key() {
+    return (
+      localStorage.getItem(
+        "finemed_api_key"
+      ) || ""
+    );
   }
-}
 
-function addMsg(role, text) {
-  const log = document.getElementById("chat-log");
-  const div = document.createElement("div");
-  div.className = `msg ${role}`;
-  div.textContent = text;
-  log.appendChild(div);
-  log.scrollTop = log.scrollHeight;
-  return div;
-}
+  function headers() {
+    const apiKey = key();
 
-let chatHistory = [];
+    const base = {
+      "Content-Type":
+        "application/json"
+    };
 
-async function sendChat() {
-  const input = document.getElementById("chat-input");
-  const btn = document.getElementById("chat-send");
-  const question = input.value.trim();
-  if (!question) return;
+    if (apiKey) {
+      base["X-API-Key"] =
+        apiKey;
+    }
 
-  addMsg("user", question);
-  input.value = "";
-  btn.disabled = true;
-  const thinking = addMsg("assistant", "...");
-
-  try {
-    const res = await fetch(`${API_BASE}/chat`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "x-api-key": getKey() },
-      body: JSON.stringify({ question, conversation_history: chatHistory }),
-    });
-    if (res.status === 401) { thinking.textContent = "Invalid API key — check the key above."; thinking.className = "msg error"; return; }
-    if (res.status === 503) { thinking.textContent = "Chat is temporarily unavailable on the server."; thinking.className = "msg error"; return; }
-    if (!res.ok) { thinking.textContent = `Error (${res.status})`; thinking.className = "msg error"; return; }
-
-    const data = await res.json();
-    thinking.textContent = data.answer;
-    chatHistory.push({ role: "user", content: question });
-    chatHistory.push({ role: "assistant", content: data.answer });
-  } catch (e) {
-    thinking.textContent = "Could not reach the server.";
-    thinking.className = "msg error";
-  } finally {
-    btn.disabled = false;
+    return base;
   }
-}
 
-async function lookupForecast() {
-  const medicineId = document.getElementById("lookup-input").value.trim();
-  const result = document.getElementById("lookup-result");
-  if (!medicineId) return;
-  result.innerHTML = "<p class='hint'>Loading...</p>";
+  async function api(
+    path,
+    options = {}
+  ) {
+    return fetch(
+      path,
+      {
+        ...options,
+        headers: {
+          ...headers(),
+          ...(options.headers || {})
+        }
+      }
+    );
+  }
 
-  try {
-    const [summaryRes, forecastRes] = await Promise.all([
-      fetch(`${API_BASE}/forecast/${medicineId}/summary`, { headers: { "x-api-key": getKey() } }),
-      fetch(`${API_BASE}/forecast/${medicineId}`, { headers: { "x-api-key": getKey() } }),
-    ]);
+  function fmt(
+    value,
+    decimals = 0
+  ) {
+    if (
+      value === null ||
+      value === undefined ||
+      Number.isNaN(
+        Number(value)
+      )
+    ) {
+      return "—";
+    }
 
-    if (summaryRes.status === 401) { result.innerHTML = "<p class='hint'>Invalid API key.</p>"; return; }
-    if (summaryRes.status === 404) { result.innerHTML = "<p class='hint'>No forecast found for that medicine code.</p>"; return; }
-    if (!summaryRes.ok || !forecastRes.ok) { result.innerHTML = "<p class='hint'>Error loading forecast.</p>"; return; }
+    return Number(value).toLocaleString(
+      undefined,
+      {
+        minimumFractionDigits:
+          decimals,
+        maximumFractionDigits:
+          decimals
+      }
+    );
+  }
 
-    const summary = await summaryRes.json();
-    const forecast = await forecastRes.json();
+  function esc(value) {
+    return String(value ?? "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#039;");
+  }
 
-    const trendClass = `trend-${summary.trend}`;
-    let html = `
-      <div class="summary-grid">
-        <div class="stat"><div class="label">Trend</div><div class="value ${trendClass}">${summary.trend}</div></div>
-        <div class="stat"><div class="label">Change</div><div class="value ${trendClass}">${summary.trend_pct_change > 0 ? "+" : ""}${summary.trend_pct_change}%</div></div>
-        <div class="stat"><div class="label">Avg daily demand</div><div class="value">${summary.avg_daily_demand}</div></div>
-        <div class="stat"><div class="label">Total (30 days)</div><div class="value">${summary.total_predicted_demand}</div></div>
+  function toast(message) {
+    const element =
+      $("toast");
+
+    element.textContent =
+      message;
+
+    element.style.display =
+      "block";
+
+    clearTimeout(
+      window.__finemedToastTimer
+    );
+
+    window.__finemedToastTimer =
+      setTimeout(() => {
+        element.style.display =
+          "none";
+      }, 2200);
+  }
+
+  /* =========================================================
+     NAVIGATION
+     ========================================================= */
+
+  function showPage(page) {
+    state.page =
+      page;
+
+    document
+      .querySelectorAll(".page")
+      .forEach((element) => {
+        element.classList.toggle(
+          "active",
+          element.id ===
+            `page-${page}`
+        );
+      });
+
+    document
+      .querySelectorAll(".nav button")
+      .forEach((button) => {
+        button.classList.toggle(
+          "active",
+          button.dataset.page ===
+            page
+        );
+      });
+
+    const titles = {
+      assistant:
+        "Finemed PharmaAI · Assistant",
+
+      overview:
+        "Finemed PharmaAI · Overview",
+
+      forecast:
+        "Finemed PharmaAI · Forecasts",
+
+      rankings:
+        "Finemed PharmaAI · Demand rankings",
+
+      operations:
+        "Finemed PharmaAI · Operations",
+
+      settings:
+        "Finemed PharmaAI · Settings"
+    };
+
+    $("top-title").innerHTML =
+      esc(
+        titles[page]
+          || "Finemed PharmaAI"
+      );
+
+    if (page === "assistant") {
+      if (!$("assistant-input")) {
+        renderAssistantWelcome();
+      }
+    }
+
+    if (page === "overview") {
+      loadOverview();
+    }
+
+    if (page === "forecast") {
+      const input =
+        $("forecast-id");
+
+      if (input) {
+        setTimeout(
+          () => input.focus(),
+          50
+        );
+      }
+    }
+
+    if (page === "rankings") {
+      loadTop();
+      loadBottom();
+    }
+
+    if (page === "operations") {
+      loadHealth();
+    }
+
+    if (page === "settings") {
+      loadSettings();
+    }
+  }
+
+  /* =========================================================
+     ASSISTANT
+     ========================================================= */
+
+  function newChat() {
+    state.sessionId =
+      crypto.randomUUID();
+
+    localStorage.setItem(
+      "finemed_session_id",
+      state.sessionId
+    );
+
+    const log =
+      $("chat-log");
+
+    if (log) {
+      log.innerHTML = "";
+    }
+
+    renderAssistantWelcome();
+
+    const session =
+      $("settings-session-id");
+
+    if (session) {
+      session.textContent =
+        state.sessionId;
+    }
+
+    toast(
+      "New conversation started"
+    );
+
+    showPage(
+      "assistant"
+    );
+  }
+
+  function renderAssistantWelcome() {
+    const log =
+      $("chat-log");
+
+    if (!log) {
+      return;
+    }
+
+    log.innerHTML = `
+      <div class="hero">
+
+        <div class="spark"></div>
+
+        <h1>
+          Demand intelligence,<br>
+          without the noise.
+        </h1>
+
+        <p>
+          Ask Finemed about forecasts,
+          medicines, demand trends,
+          and model decisions.
+        </p>
+
       </div>
-      <table>
-        <thead><tr><th>Date</th><th>Predicted</th><th>P10</th><th>P90</th></tr></thead>
-        <tbody>`;
-    forecast.days.slice(0, 10).forEach(d => {
-      html += `<tr><td>${d.forecast_date}</td><td>${d.predicted_demand}</td><td>${d.quantiles.p10}</td><td>${d.quantiles.p90}</td></tr>`;
-    });
-    html += `</tbody></table><div class="hint">Showing first 10 of ${forecast.days.length} forecasted days.</div>`;
-    result.innerHTML = html;
-  } catch (e) {
-    result.innerHTML = "<p class='hint'>Could not reach the server.</p>";
-  }
-}
 
-document.getElementById("api-key").value = getKey();
-checkHealth();
+      <div class="composer-wrap">
+
+        <div class="composer">
+
+          <textarea
+            id="assistant-input"
+            placeholder="Ask about a medicine, forecast, trend, or model decision..."
+            aria-label="Finemed assistant input"
+          ></textarea>
+
+          <div class="composer-footer">
+
+            <div class="composer-left">
+
+              <button
+                class="tool"
+                type="button"
+                onclick="focusMedicine()"
+              >
+                Medicine
+              </button>
+
+              <button
+                class="tool"
+                type="button"
+                onclick="usePrompt('Show the top 5 medicines by demand')"
+              >
+                Rankings
+              </button>
+
+              <button
+                class="tool"
+                type="button"
+                onclick="usePrompt('Give me the overall forecast summary')"
+              >
+                Summary
+              </button>
+
+            </div>
+
+            <div class="composer-right">
+
+              <button
+                id="assistant-send"
+                class="send"
+                type="button"
+                onclick="sendAssistant()"
+                aria-label="Send"
+              >
+                ↑
+              </button>
+
+            </div>
+
+          </div>
+
+        </div>
+
+        <div class="quick-grid">
+
+          <button
+            class="quick"
+            type="button"
+            onclick="usePrompt('What is the forecast for Otacare?')"
+          >
+            <div class="quick-title">
+              Forecast a medicine
+            </div>
+
+            <div class="quick-sub">
+              Get the current production forecast.
+            </div>
+          </button>
+
+          <button
+            class="quick"
+            type="button"
+            onclick="usePrompt('Which model predicted Otacare?')"
+          >
+            <div class="quick-title">
+              Explain the model
+            </div>
+
+            <div class="quick-sub">
+              See the selected model and evidence.
+            </div>
+          </button>
+
+          <button
+            class="quick"
+            type="button"
+            onclick="usePrompt('Why was that model selected?')"
+          >
+            <div class="quick-title">
+              Explain the decision
+            </div>
+
+            <div class="quick-sub">
+              Understand the routing decision.
+            </div>
+          </button>
+
+          <button
+            class="quick"
+            type="button"
+            onclick="usePrompt('Show the top 5 medicines by demand')"
+          >
+            <div class="quick-title">
+              Review demand
+            </div>
+
+            <div class="quick-sub">
+              See the highest predicted demand.
+            </div>
+          </button>
+
+        </div>
+
+      </div>
+    `;
+
+    const input =
+      $("assistant-input");
+
+    if (input) {
+      input.addEventListener(
+        "keydown",
+        (event) => {
+          if (
+            event.key === "Enter" &&
+            !event.shiftKey
+          ) {
+            event.preventDefault();
+            sendAssistant();
+          }
+        }
+      );
+    }
+  }
+
+  function addMsg(
+    role,
+    text
+  ) {
+    const log =
+      $("chat-log");
+
+    const div =
+      document.createElement(
+        "div"
+      );
+
+    div.className =
+      `msg ${role}`;
+
+    div.textContent =
+      text;
+
+    log.appendChild(
+      div
+    );
+
+    log.scrollTop =
+      log.scrollHeight;
+
+    return div;
+  }
+
+  async function sendAssistant() {
+    if (state.busy) {
+      return;
+    }
+
+    const input =
+      $("assistant-input");
+
+    if (!input) {
+      return;
+    }
+
+    const question =
+      input.value.trim();
+
+    if (!question) {
+      return;
+    }
+
+    state.busy =
+      true;
+
+    const sendButton =
+      $("assistant-send");
+
+    if (sendButton) {
+      sendButton.disabled =
+        true;
+    }
+
+    addMsg(
+      "user",
+      question
+    );
+
+    input.value =
+      "";
+
+    const pending =
+      addMsg(
+        "assistant",
+        "Thinking…"
+      );
+
+    try {
+      const response =
+        await api(
+          "/chat",
+          {
+            method: "POST",
+            body: JSON.stringify({
+              question,
+              session_id:
+                state.sessionId
+            })
+          }
+        );
+
+      if (
+        response.status === 401
+      ) {
+        throw new Error(
+          "Invalid or missing API key."
+        );
+      }
+
+      if (!response.ok) {
+        throw new Error(
+          `Request failed (${response.status}).`
+        );
+      }
+
+      const data =
+        await response.json();
+
+      pending.textContent =
+        data.answer ||
+        "No answer returned.";
+
+    } catch (error) {
+      pending.textContent =
+        error.message ||
+        "Unable to reach the production service.";
+
+      pending.className =
+        "msg error";
+
+    } finally {
+      state.busy =
+        false;
+
+      if (sendButton) {
+        sendButton.disabled =
+          false;
+      }
+    }
+  }
+
+  function usePrompt(
+    text
+  ) {
+    showPage(
+      "assistant"
+    );
+
+    const input =
+      $("assistant-input");
+
+    if (!input) {
+      return;
+    }
+
+    input.value =
+      text;
+
+    input.focus();
+
+    sendAssistant();
+  }
+
+  function focusMedicine() {
+    showPage(
+      "forecast"
+    );
+
+    const input =
+      $("forecast-id");
+
+    if (input) {
+      input.focus();
+    }
+  }
+
+  /* =========================================================
+     HEALTH / OPERATIONS
+     ========================================================= */
+
+  async function loadHealth() {
+    try {
+      const response =
+        await fetch(
+          "/health"
+        );
+
+      if (!response.ok) {
+        throw new Error(
+          `Health check failed (${response.status})`
+        );
+      }
+
+      const data =
+        await response.json();
+
+      const ok =
+        data.status ===
+        "ok";
+
+      const status =
+        $("status");
+
+      if (status) {
+        status.className =
+          `status ${
+            ok ? "ok" : "bad"
+          }`;
+
+        status.innerHTML =
+          `
+            <span class="dot"></span>
+            ${
+              ok
+                ? "Production healthy"
+                : "Production degraded"
+            }
+          `;
+      }
+
+      const opApi =
+        $("op-api");
+
+      if (opApi) {
+        opApi.textContent =
+          ok
+            ? "OK"
+            : "DEGRADED";
+      }
+
+      const opStore =
+        $("op-store");
+
+      if (opStore) {
+        opStore.textContent =
+          data.forecast_store_loaded
+            ? "LOADED"
+            : "UNAVAILABLE";
+      }
+
+      const opChat =
+        $("op-chat");
+
+      if (opChat) {
+        opChat.textContent =
+          data.chat_available
+            ? "AVAILABLE"
+            : "UNAVAILABLE";
+      }
+
+      const opCount =
+        $("op-count");
+
+      if (opCount) {
+        opCount.textContent =
+          fmt(
+            data.medicines_available
+          );
+      }
+
+      return data;
+
+    } catch (error) {
+      const status =
+        $("status");
+
+      if (status) {
+        status.className =
+          "status bad";
+
+        status.innerHTML =
+          `
+            <span class="dot"></span>
+            Service unavailable
+          `;
+      }
+
+      const opApi =
+        $("op-api");
+
+      if (opApi) {
+        opApi.textContent =
+          "UNAVAILABLE";
+      }
+
+      return null;
+    }
+  }
+
+  /* =========================================================
+     OVERVIEW
+     ========================================================= */
+
+  async function loadOverview() {
+    const health =
+      await loadHealth();
+
+    try {
+      const response =
+        await api(
+          "/chat",
+          {
+            method: "POST",
+            body: JSON.stringify({
+              question:
+                "Give me the overall forecast summary",
+              session_id:
+                state.sessionId
+            })
+          }
+        );
+
+      if (!response.ok) {
+        return;
+      }
+
+      const data =
+        await response.json();
+
+      const summary =
+        data.data || {};
+
+      const medicineElement =
+        $("ov-medicines");
+
+      if (medicineElement) {
+        medicineElement.textContent =
+          fmt(
+            summary.medicine_count ??
+            summary.medicines_available ??
+            health?.medicines_available
+          );
+      }
+
+      const daysElement =
+        $("ov-days");
+
+      if (daysElement) {
+        daysElement.textContent =
+          fmt(
+            summary.forecast_days
+          );
+      }
+
+      const totalElement =
+        $("ov-total");
+
+      if (totalElement) {
+        totalElement.textContent =
+          fmt(
+            summary.total_predicted_demand,
+            2
+          );
+      }
+
+      const dailyElement =
+        $("ov-daily");
+
+      if (dailyElement) {
+        dailyElement.textContent =
+          fmt(
+            summary.average_daily_predicted_demand ??
+            summary.average_daily_demand,
+            2
+          );
+      }
+
+      const startElement =
+        $("ov-start");
+
+      if (startElement) {
+        startElement.textContent =
+          summary.forecast_start ||
+          "—";
+      }
+
+      const endElement =
+        $("ov-end");
+
+      if (endElement) {
+        endElement.textContent =
+          summary.forecast_end ||
+          "—";
+      }
+
+      const storeElement =
+        $("ov-store");
+
+      if (storeElement) {
+        storeElement.textContent =
+          health?.forecast_store_loaded
+            ? "Loaded"
+            : "—";
+      }
+
+      const chatElement =
+        $("ov-chat");
+
+      if (chatElement) {
+        chatElement.textContent =
+          health?.chat_available
+            ? "Available"
+            : "—";
+      }
+
+      renderModels(
+        summary.model_distribution
+      );
+
+      await loadTopInto(
+        "ov-top"
+      );
+
+    } catch (error) {
+      // Optional dashboard data should not break the UI.
+    }
+  }
+
+  function renderModels(
+    distribution
+  ) {
+    const element =
+      $("ov-models");
+
+    if (!element) {
+      return;
+    }
+
+    if (
+      !distribution ||
+      !Object.keys(
+        distribution
+      ).length
+    ) {
+      element.innerHTML =
+        `
+          <div class="empty">
+            No model distribution available.
+          </div>
+        `;
+      return;
+    }
+
+    element.innerHTML =
+      `
+        <table class="table">
+
+          <thead>
+
+            <tr>
+              <th>Model</th>
+              <th>Medicines</th>
+            </tr>
+
+          </thead>
+
+          <tbody>
+
+            ${
+              Object.entries(
+                distribution
+              )
+              .map(
+                ([model, count]) => `
+                  <tr>
+
+                    <td>
+                      <span class="badge orange">
+                        ${esc(model)}
+                      </span>
+                    </td>
+
+                    <td>
+                      ${fmt(count)}
+                    </td>
+
+                  </tr>
+                `
+              )
+              .join("")
+            }
+
+          </tbody>
+
+        </table>
+      `;
+  }
+
+  /* =========================================================
+     TOP / BOTTOM RANKINGS
+     ========================================================= */
+
+  async function loadTop() {
+    await loadTopInto(
+      "top-table"
+    );
+  }
+
+  async function loadTopInto(
+    id
+  ) {
+    const element =
+      $(id);
+
+    if (!element) {
+      return;
+    }
+
+    try {
+      const response =
+        await api(
+          "/forecast/top?n=10"
+        );
+
+      if (!response.ok) {
+        throw new Error(
+          `HTTP ${response.status}`
+        );
+      }
+
+      const data =
+        await response.json();
+
+      renderRank(
+        element,
+        data.medicines || []
+      );
+
+    } catch (error) {
+      element.innerHTML =
+        `
+          <div class="empty">
+            Unable to load rankings.
+          </div>
+        `;
+    }
+  }
+
+  async function loadBottom() {
+    const element =
+      $("bottom-table");
+
+    if (!element) {
+      return;
+    }
+
+    element.innerHTML =
+      `
+        <div class="empty">
+          Loading…
+        </div>
+      `;
+
+    try {
+      const response =
+        await api(
+          "/chat",
+          {
+            method: "POST",
+            body: JSON.stringify({
+              question:
+                "Show the bottom 10 medicines by demand",
+              session_id:
+                state.sessionId
+            })
+          }
+        );
+
+      if (!response.ok) {
+        throw new Error(
+          `HTTP ${response.status}`
+        );
+      }
+
+      const data =
+        await response.json();
+
+      element.innerHTML =
+        `
+          <div
+            class="notice"
+            style="margin-bottom:10px"
+          >
+            ${esc(
+              data.answer || ""
+            )}
+          </div>
+        `;
+
+    } catch (error) {
+      element.innerHTML =
+        `
+          <div class="empty">
+            Unable to load lowest-demand ranking.
+          </div>
+        `;
+    }
+  }
+
+  function renderRank(
+    element,
+    items
+  ) {
+    if (!items.length) {
+      element.innerHTML =
+        `
+          <div class="empty">
+            No ranking data available.
+          </div>
+        `;
+      return;
+    }
+
+    element.innerHTML =
+      `
+        <table class="table">
+
+          <thead>
+
+            <tr>
+              <th>#</th>
+              <th>Medicine</th>
+              <th>Demand</th>
+            </tr>
+
+          </thead>
+
+          <tbody>
+
+            ${
+              items
+                .map(
+                  (item, index) => `
+                    <tr>
+
+                      <td>
+                        ${index + 1}
+                      </td>
+
+                      <td>
+                        ${esc(
+                          item.medicine_name ||
+                          item.medicine_id ||
+                          "—"
+                        )}
+                      </td>
+
+                      <td>
+                        ${fmt(
+                          item.total_predicted_demand,
+                          2
+                        )}
+                      </td>
+
+                    </tr>
+                  `
+                )
+                .join("")
+            }
+
+          </tbody>
+
+        </table>
+      `;
+  }
+
+  /* =========================================================
+     FORECAST
+     ========================================================= */
+
+  async function loadForecast() {
+    const input =
+      $("forecast-id");
+
+    const element =
+      $("forecast-view");
+
+    if (!input || !element) {
+      return;
+    }
+
+    const id =
+      input.value.trim();
+
+    if (!id) {
+      toast(
+        "Enter a medicine code"
+      );
+      return;
+    }
+
+    element.innerHTML =
+      `
+        <div class="empty">
+          Loading forecast…
+        </div>
+      `;
+
+    try {
+      const [
+        summaryResponse,
+        forecastResponse
+      ] =
+        await Promise.all([
+          api(
+            `/forecast/${encodeURIComponent(
+              id
+            )}/summary`
+          ),
+
+          api(
+            `/forecast/${encodeURIComponent(
+              id
+            )}`
+          )
+        ]);
+
+      if (
+        summaryResponse.status === 401 ||
+        forecastResponse.status === 401
+      ) {
+        throw new Error(
+          "AUTH"
+        );
+      }
+
+      if (
+        summaryResponse.status === 404 ||
+        forecastResponse.status === 404
+      ) {
+        throw new Error(
+          "NOT_FOUND"
+        );
+      }
+
+      if (
+        !summaryResponse.ok ||
+        !forecastResponse.ok
+      ) {
+        throw new Error(
+          "FAIL"
+        );
+      }
+
+      const summary =
+        await summaryResponse.json();
+
+      const forecast =
+        await forecastResponse.json();
+
+      renderForecast(
+        element,
+        id,
+        summary,
+        forecast
+      );
+
+    } catch (error) {
+      let message =
+        "Unable to load the production forecast.";
+
+      if (
+        error.message === "AUTH"
+      ) {
+        message =
+          "Invalid or missing API key.";
+      } else if (
+        error.message === "NOT_FOUND"
+      ) {
+        message =
+          "No production forecast found for that medicine.";
+      }
+
+      element.innerHTML =
+        `
+          <div class="empty">
+            ${esc(message)}
+          </div>
+        `;
+    }
+  }
+
+  function renderForecast(
+    element,
+    id,
+    summary,
+    forecast
+  ) {
+    const days =
+      Array.isArray(
+        forecast.days
+      )
+        ? forecast.days
+        : [];
+
+    const total =
+      summary.total_predicted_demand ??
+      days.reduce(
+        (
+          totalValue,
+          day
+        ) =>
+          totalValue +
+          Number(
+            day.predicted_demand ||
+            0
+          ),
+        0
+      );
+
+    const average =
+      summary.avg_daily_demand ??
+      (
+        days.length
+          ? total /
+            days.length
+          : 0
+      );
+
+    const model =
+      forecast.model_id ||
+      summary.selected_model ||
+      "—";
+
+    const name =
+      summary.medicine_name ||
+      forecast.medicine_name ||
+      id;
+
+    element.innerHTML =
+      `
+        <div class="panel-header">
+
+          <div>
+
+            <div
+              class="panel-title"
+              style="font-size:20px"
+            >
+              ${esc(name)}
+            </div>
+
+            <div class="panel-sub">
+              Medicine code ${esc(id)}
+            </div>
+
+          </div>
+
+          <span class="badge orange">
+            ${esc(model)}
+          </span>
+
+        </div>
+
+        <div class="mini-grid">
+
+          <div class="mini">
+
+            <div class="mini-l">
+              Total demand
+            </div>
+
+            <div class="mini-v">
+              ${fmt(total, 2)}
+            </div>
+
+          </div>
+
+          <div class="mini">
+
+            <div class="mini-l">
+              Average/day
+            </div>
+
+            <div class="mini-v">
+              ${fmt(average, 2)}
+            </div>
+
+          </div>
+
+          <div class="mini">
+
+            <div class="mini-l">
+              Eligibility
+            </div>
+
+            <div class="mini-v">
+              ${esc(
+                summary.eligibility_status ||
+                "—"
+              )}
+            </div>
+
+          </div>
+
+          <div class="mini">
+
+            <div class="mini-l">
+              Status
+            </div>
+
+            <div class="mini-v">
+              ${esc(
+                summary.forecast_status ||
+                "—"
+              )}
+            </div>
+
+          </div>
+
+        </div>
+
+        <div class="chart">
+          ${buildForecastChart(days)}
+        </div>
+
+        <div style="height:14px"></div>
+
+        <div class="panel-title">
+          Forecast days
+        </div>
+
+        <div
+          class="table-wrap"
+          style="margin-top:8px"
+        >
+
+          <table class="table">
+
+            <thead>
+
+              <tr>
+                <th>Date</th>
+                <th>Predicted</th>
+                <th>P10</th>
+                <th>P50</th>
+                <th>P90</th>
+              </tr>
+
+            </thead>
+
+            <tbody>
+
+              ${
+                days.length
+                  ? days
+                      .map(
+                        (day) => `
+                          <tr>
+
+                            <td>
+                              ${esc(
+                                day.forecast_date ||
+                                "—"
+                              )}
+                            </td>
+
+                            <td>
+                              ${fmt(
+                                day.predicted_demand,
+                                2
+                              )}
+                            </td>
+
+                            <td>
+                              ${quantileValue(
+                                day,
+                                "p10"
+                              )}
+                            </td>
+
+                            <td>
+                              ${quantileValue(
+                                day,
+                                "p50"
+                              )}
+                            </td>
+
+                            <td>
+                              ${quantileValue(
+                                day,
+                                "p90"
+                              )}
+                            </td>
+
+                          </tr>
+                        `
+                      )
+                      .join("")
+                  : `
+                    <tr>
+                      <td colspan="5">
+                        No forecast days available.
+                      </td>
+                    </tr>
+                  `
+              }
+
+            </tbody>
+
+          </table>
+
+        </div>
+      `;
+  }
+
+  function quantileValue(
+    day,
+    key
+  ) {
+    const value =
+      day.quantiles?.[
+        key
+      ];
+
+    return value == null
+      ? "—"
+      : fmt(
+          value,
+          2
+        );
+  }
+
+  function buildForecastChart(
+    days
+  ) {
+    if (!days.length) {
+      return `
+        <div class="empty">
+          No forecast series available.
+        </div>
+      `;
+    }
+
+    const width =
+      900;
+
+    const height =
+      220;
+
+    const padding =
+      24;
+
+    const values =
+      days.map(
+        (day) =>
+          Number(
+            day.predicted_demand ||
+            0
+          )
+      );
+
+    const max =
+      Math.max(
+        ...values,
+        1
+      );
+
+    const min =
+      Math.min(
+        ...values,
+        0
+      );
+
+    const range =
+      Math.max(
+        max - min,
+        1
+      );
+
+    const points =
+      values
+        .map(
+          (
+            value,
+            index
+          ) => {
+            const x =
+              padding +
+              (
+                index /
+                Math.max(
+                  values.length - 1,
+                  1
+                )
+              ) *
+              (
+                width -
+                padding * 2
+              );
+
+            const y =
+              height -
+              padding -
+              (
+                (
+                  value -
+                  min
+                ) /
+                range
+              ) *
+              (
+                height -
+                padding * 2
+              );
+
+            return (
+              `${x.toFixed(1)},${y.toFixed(1)}`
+            );
+          }
+        )
+        .join(" ");
+
+    return `
+      <svg
+        viewBox="0 0 ${width} ${height}"
+        role="img"
+        aria-label="Forecast demand chart"
+      >
+        <polyline
+          fill="none"
+          stroke="#d97745"
+          stroke-width="3"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          points="${points}"
+        />
+      </svg>
+    `;
+  }
+
+  /* =========================================================
+     SETTINGS
+     ========================================================= */
+
+  function loadSettings() {
+    const keyInput =
+      $("settings-api-key");
+
+    const status =
+      $("settings-api-status");
+
+    const health =
+      $("settings-health");
+
+    const session =
+      $("settings-session-id");
+
+    if (keyInput) {
+      keyInput.value =
+        key();
+    }
+
+    if (session) {
+      session.textContent =
+        state.sessionId;
+    }
+
+    if (status) {
+      status.textContent =
+        key()
+          ? "API key is configured in this browser."
+          : "No API key configured.";
+    }
+
+    if (health) {
+      health.textContent =
+        "Checking production service…";
+    }
+
+    testApiConnection();
+  }
+
+  function saveSettingsApiKey() {
+    const input =
+      $("settings-api-key");
+
+    if (!input) {
+      return;
+    }
+
+    const value =
+      input.value.trim();
+
+    if (!value) {
+      toast(
+        "Enter an API key first."
+      );
+      return;
+    }
+
+    localStorage.setItem(
+      "finemed_api_key",
+      value
+    );
+
+    const status =
+      $("settings-api-status");
+
+    if (status) {
+      status.textContent =
+        "API key saved successfully.";
+    }
+
+    toast(
+      "API key saved."
+    );
+
+    testApiConnection();
+    loadHealth();
+  }
+
+  function toggleApiKeyVisibility(
+    button
+  ) {
+    const input =
+      $("settings-api-key");
+
+    if (!input) {
+      return;
+    }
+
+    if (
+      input.type === "password"
+    ) {
+      input.type =
+        "text";
+
+      button.textContent =
+        "Hide";
+
+    } else {
+      input.type =
+        "password";
+
+      button.textContent =
+        "Show";
+    }
+  }
+
+  async function testApiConnection() {
+    const status =
+      $("settings-health");
+
+    if (!status) {
+      return;
+    }
+
+    status.textContent =
+      "Testing production API…";
+
+    try {
+      const response =
+        await fetch(
+          "/health"
+        );
+
+      if (!response.ok) {
+        throw new Error(
+          `Health check failed (${response.status})`
+        );
+      }
+
+      const data =
+        await response.json();
+
+      status.innerHTML =
+        `
+          <strong>Production API:</strong>
+          ${esc(
+            data.status ||
+            "unknown"
+          )}
+          · Forecast store:
+          ${
+            data.forecast_store_loaded
+              ? "loaded"
+              : "unavailable"
+          }
+          · Chat:
+          ${
+            data.chat_available
+              ? "available"
+              : "unavailable"
+          }
+          · Medicines:
+          ${fmt(
+            data.medicines_available
+          )}
+        `;
+
+      if (
+        data.status === "ok"
+      ) {
+        toast(
+          "Production API connection successful."
+        );
+      }
+
+    } catch (error) {
+      status.textContent =
+        error.message ||
+        "Unable to connect to the API.";
+
+      toast(
+        "Production API connection failed."
+      );
+    }
+  }
+
+  /* =========================================================
+     INITIALIZATION
+     ========================================================= */
+
+  document.addEventListener(
+    "keydown",
+    (event) => {
+      if (
+        event.key === "Escape"
+      ) {
+        const input =
+          $("assistant-input");
+
+        if (input) {
+          input.blur();
+        }
+      }
+    }
+  );
+
+  renderAssistantWelcome();
+
+  loadHealth();
+
+  loadOverview();
+
+  if ($("settings-api-key")) {
+    loadSettings();
+  }
 </script>
+
 </body>
 </html>

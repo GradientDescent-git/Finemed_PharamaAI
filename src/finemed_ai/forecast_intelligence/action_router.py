@@ -119,7 +119,10 @@ class ForecastActionRouter:
         fallback_router: IntentRouter | None = None,
     ) -> None:
         self.llm_callable = llm_callable
-        self.fallback_router = fallback_router or IntentRouter()
+        self.fallback_router = (
+            fallback_router
+            or IntentRouter()
+        )
 
     # ------------------------------------------------------------------
     # Public API
@@ -138,8 +141,10 @@ class ForecastActionRouter:
         falls back safely to deterministic routing.
         """
 
-        normalized_question = self._normalize_question(
-            question
+        normalized_question = (
+            self._normalize_question(
+                question
+            )
         )
 
         if not normalized_question:
@@ -197,10 +202,16 @@ class ForecastActionRouter:
         - JSON surrounded by explanatory text.
         """
 
-        if isinstance(raw_response, dict):
+        if isinstance(
+            raw_response,
+            dict,
+        ):
             return raw_response
 
-        if not isinstance(raw_response, str):
+        if not isinstance(
+            raw_response,
+            str,
+        ):
             return None
 
         text = raw_response.strip()
@@ -222,11 +233,16 @@ class ForecastActionRouter:
         ).strip()
 
         try:
-            parsed = json.loads(text)
+            parsed = json.loads(
+                text
+            )
 
             return (
                 parsed
-                if isinstance(parsed, dict)
+                if isinstance(
+                    parsed,
+                    dict,
+                )
                 else None
             )
 
@@ -250,7 +266,10 @@ class ForecastActionRouter:
 
             return (
                 parsed
-                if isinstance(parsed, dict)
+                if isinstance(
+                    parsed,
+                    dict,
+                )
                 else None
             )
 
@@ -278,9 +297,15 @@ class ForecastActionRouter:
             data.get("action")
         )
 
-        medicine_query = (
+        raw_medicine_query = (
             self._normalize_optional_string(
                 data.get("medicine_query")
+            )
+        )
+
+        medicine_query = (
+            self._normalize_medicine_query(
+                raw_medicine_query
             )
         )
 
@@ -296,16 +321,28 @@ class ForecastActionRouter:
             )
         )
 
-        status = self._normalize_optional_string(
-            data.get("status")
+        status = (
+            self._normalize_optional_string(
+                data.get("status")
+            )
         )
 
-        needs_context = self._normalize_bool(
-            data.get("needs_context", False)
+        needs_context = (
+            self._normalize_bool(
+                data.get(
+                    "needs_context",
+                    False,
+                )
+            )
         )
 
-        confidence = self._normalize_confidence(
-            data.get("confidence", 0.0)
+        confidence = (
+            self._normalize_confidence(
+                data.get(
+                    "confidence",
+                    0.0,
+                )
+            )
         )
 
         # Medicine-specific actions require either:
@@ -319,7 +356,9 @@ class ForecastActionRouter:
             and not medicine_query
             and not needs_context
         ):
-            action = "insufficient_information"
+            action = (
+                "insufficient_information"
+            )
 
         # Ranking defaults.
         if action == "ranking":
@@ -361,15 +400,24 @@ class ForecastActionRouter:
     ) -> str:
         """Return a supported action or insufficient_information."""
 
-        if not isinstance(value, str):
-            return "insufficient_information"
+        if not isinstance(
+            value,
+            str,
+        ):
+            return (
+                "insufficient_information"
+            )
 
-        normalized = value.strip().lower()
+        normalized = (
+            value.strip().lower()
+        )
 
         if normalized in SUPPORTED_ACTIONS:
             return normalized
 
-        return "insufficient_information"
+        return (
+            "insufficient_information"
+        )
 
     @staticmethod
     def _normalize_optional_string(
@@ -377,7 +425,10 @@ class ForecastActionRouter:
     ) -> str | None:
         """Normalize an optional non-empty string."""
 
-        if not isinstance(value, str):
+        if not isinstance(
+            value,
+            str,
+        ):
             return None
 
         normalized = " ".join(
@@ -398,6 +449,81 @@ class ForecastActionRouter:
         return normalized
 
     @staticmethod
+    def _normalize_medicine_query(
+        value: Any,
+    ) -> str | None:
+        """
+        Normalize an explicit medicine reference without performing
+        medicine resolution.
+
+        Supported explicit code forms include:
+
+        - "0001"
+        - "1"
+        - "medicine 0001"
+        - "medicine id 0001"
+        - "medicine code 0001"
+        - "medicine number 0001"
+        - "product id 0001"
+        - "product code 0001"
+
+        The resolver remains the authority for determining whether the
+        resulting code/name actually exists and is unambiguous.
+        """
+
+        if value is None:
+            return None
+
+        normalized = (
+            ForecastActionRouter
+            ._normalize_optional_string(
+                value
+            )
+        )
+
+        if not normalized:
+            return None
+
+        # ---------------------------------------------------------
+        # 1. Bare numeric medicine code
+        # ---------------------------------------------------------
+
+        if normalized.isdigit():
+            return normalized.zfill(4)
+
+        # ---------------------------------------------------------
+        # 2. Explicit medicine/product identifier
+        # ---------------------------------------------------------
+
+        explicit_code_patterns = (
+            r"\b(?:medicine|medicines|product)\s*"
+            r"(?:id|code|number)\s*"
+            r"[:#-]?\s*(\d{1,6})\b",
+
+            r"\b(?:medicine|medicines|product)\s*"
+            r"[:#-]?\s*(\d{1,6})\b",
+        )
+
+        for pattern in explicit_code_patterns:
+            match = re.search(
+                pattern,
+                normalized,
+                flags=re.IGNORECASE,
+            )
+
+            if match:
+                return (
+                    match.group(1)
+                    .zfill(4)
+                )
+
+        # ---------------------------------------------------------
+        # 3. Normal medicine name
+        # ---------------------------------------------------------
+
+        return normalized
+
+    @staticmethod
     def _normalize_bool(
         value: Any,
     ) -> bool:
@@ -407,11 +533,19 @@ class ForecastActionRouter:
         Avoids Python's unsafe bool("false") == True behavior.
         """
 
-        if isinstance(value, bool):
+        if isinstance(
+            value,
+            bool,
+        ):
             return value
 
-        if isinstance(value, str):
-            normalized = value.strip().lower()
+        if isinstance(
+            value,
+            str,
+        ):
+            normalized = (
+                value.strip().lower()
+            )
 
             if normalized in {
                 "true",
@@ -429,8 +563,14 @@ class ForecastActionRouter:
                 return False
 
         if (
-            isinstance(value, (int, float))
-            and not isinstance(value, bool)
+            isinstance(
+                value,
+                (int, float),
+            )
+            and not isinstance(
+                value,
+                bool,
+            )
         ):
             return bool(value)
 
@@ -446,11 +586,15 @@ class ForecastActionRouter:
         if value is None:
             return None
 
-        if isinstance(value, bool):
+        if isinstance(
+            value,
+            bool,
+        ):
             return None
 
         try:
             limit = int(value)
+
         except (
             TypeError,
             ValueError,
@@ -471,10 +615,15 @@ class ForecastActionRouter:
     ) -> str | None:
         """Normalize ranking direction."""
 
-        if not isinstance(value, str):
+        if not isinstance(
+            value,
+            str,
+        ):
             return None
 
-        normalized = value.strip().lower()
+        normalized = (
+            value.strip().lower()
+        )
 
         aliases = {
             "highest": "highest",
@@ -488,7 +637,9 @@ class ForecastActionRouter:
             "ascending": "lowest",
         }
 
-        return aliases.get(normalized)
+        return aliases.get(
+            normalized
+        )
 
     @staticmethod
     def _normalize_confidence(
@@ -497,7 +648,10 @@ class ForecastActionRouter:
         """Normalize confidence into [0.0, 1.0]."""
 
         try:
-            confidence = float(value)
+            confidence = float(
+                value
+            )
+
         except (
             TypeError,
             ValueError,
@@ -509,7 +663,10 @@ class ForecastActionRouter:
 
         return max(
             0.0,
-            min(1.0, confidence),
+            min(
+                1.0,
+                confidence,
+            ),
         )
 
     # ------------------------------------------------------------------
@@ -535,17 +692,26 @@ class ForecastActionRouter:
         )
 
         intent_to_action = {
-            ForecastIntent.FORECAST: "forecast",
-            ForecastIntent.FORECAST_RANGE: "forecast_range",
-            ForecastIntent.MODEL_INFO: "model_info",
-            ForecastIntent.ROUTING_EXPLANATION: (
-                "routing_explanation"
-            ),
-            ForecastIntent.RANKING: "ranking",
-            ForecastIntent.STATUS_QUERY: "status_query",
-            ForecastIntent.FORECAST_SUMMARY: (
-                "forecast_summary"
-            ),
+            ForecastIntent.FORECAST:
+                "forecast",
+
+            ForecastIntent.FORECAST_RANGE:
+                "forecast_range",
+
+            ForecastIntent.MODEL_INFO:
+                "model_info",
+
+            ForecastIntent.ROUTING_EXPLANATION:
+                "routing_explanation",
+
+            ForecastIntent.RANKING:
+                "ranking",
+
+            ForecastIntent.STATUS_QUERY:
+                "status_query",
+
+            ForecastIntent.FORECAST_SUMMARY:
+                "forecast_summary",
         }
 
         action = intent_to_action.get(
@@ -553,8 +719,10 @@ class ForecastActionRouter:
         )
 
         if action is None:
-            action = self._fallback_special_action(
-                question
+            action = (
+                self._fallback_special_action(
+                    question
+                )
             )
 
         medicine_query = None
@@ -571,18 +739,27 @@ class ForecastActionRouter:
             # - What is the P90 forecast?
             # - Give me the P10.
             # - What about the forecast range?
-            needs_context = self._needs_context(
-                question,
-                action,
+            needs_context = (
+                self._needs_context(
+                    question,
+                    action,
+                )
             )
 
             # Only extract a medicine when the current question is
             # expected to explicitly contain one.
             if not needs_context:
-                medicine_query = (
+
+                raw_medicine_query = (
                     self._extract_medicine_query(
                         question,
                         result.matched_patterns,
+                    )
+                )
+
+                medicine_query = (
+                    self._normalize_medicine_query(
+                        raw_medicine_query
                     )
                 )
 
@@ -592,7 +769,9 @@ class ForecastActionRouter:
                 not medicine_query
                 and not needs_context
             ):
-                action = "insufficient_information"
+                action = (
+                    "insufficient_information"
+                )
 
         ranking_limit = None
         ranking_direction = None
@@ -641,7 +820,9 @@ class ForecastActionRouter:
     ) -> str:
         """Handle greetings, help, and unsupported questions."""
 
-        normalized = question.lower().strip()
+        normalized = (
+            question.lower().strip()
+        )
 
         if re.search(
             r"\b("
@@ -678,18 +859,65 @@ class ForecastActionRouter:
         | list[str],
     ) -> str | None:
         """
-        Extract a probable medicine phrase from a deterministic question.
+        Extract a probable medicine reference from a deterministic question.
 
         The returned value is only a candidate. MedicineResolver remains
         the authority for actual medicine resolution.
 
-        This method intentionally avoids a generic leftover-token fallback.
-        Arbitrary words must never become a medicine candidate.
+        Explicit medicine-code references are normalized so phrases such as:
+
+        - "medicine id 0001"
+        - "medicine code 0001"
+        - "medicine 0001"
+        - "product id 0001"
+
+        are passed to MedicineResolver as the canonical numeric code
+        "0001".
         """
 
         del matched_patterns
 
+        if not isinstance(
+            question,
+            str,
+        ):
+            return None
+
         text = question.strip()
+
+        if not text:
+            return None
+
+        # ---------------------------------------------------------
+        # 1. Explicit medicine/product code references
+        # ---------------------------------------------------------
+
+        explicit_code_patterns = (
+            r"\b(?:medicine|medicines|product)\s*"
+            r"(?:id|code|number)\s*"
+            r"[:#-]?\s*(\d{1,6})\b",
+
+            r"\b(?:medicine|medicines|product)\s*"
+            r"[:#-]?\s*(\d{1,6})\b",
+        )
+
+        for pattern in explicit_code_patterns:
+
+            match = re.search(
+                pattern,
+                text,
+                flags=re.IGNORECASE,
+            )
+
+            if match:
+                return (
+                    match.group(1)
+                    .zfill(4)
+                )
+
+        # ---------------------------------------------------------
+        # 2. Standard medicine/name extraction
+        # ---------------------------------------------------------
 
         patterns = [
             (
@@ -734,13 +962,29 @@ class ForecastActionRouter:
                 flags=re.IGNORECASE,
             )
 
-            if match:
-                candidate = " ".join(
-                    match.group(1).strip().split()
-                )
+            if not match:
+                continue
 
-                if candidate:
-                    return candidate
+            candidate = " ".join(
+                match.group(1)
+                .strip()
+                .split()
+            )
+
+            if not candidate:
+                continue
+
+            # Normalize an explicit medicine code captured by the
+            # broader forecast/name regex.
+            normalized_candidate = (
+                ForecastActionRouter
+                ._normalize_medicine_query(
+                    candidate
+                )
+            )
+
+            if normalized_candidate:
+                return normalized_candidate
 
         return None
 
@@ -771,6 +1015,7 @@ class ForecastActionRouter:
             limit = int(
                 match.group(2)
             )
+
         except ValueError:
             return None
 
@@ -788,7 +1033,9 @@ class ForecastActionRouter:
     ) -> str:
         """Determine ranking direction."""
 
-        normalized = question.lower()
+        normalized = (
+            question.lower()
+        )
 
         if re.search(
             r"\b("
@@ -827,6 +1074,7 @@ class ForecastActionRouter:
         )
 
         for status in statuses:
+
             if status in normalized:
                 return status
 
@@ -861,7 +1109,9 @@ class ForecastActionRouter:
         forecast_range. The router does not invent a medicine.
         """
 
-        normalized = question.lower().strip()
+        normalized = (
+            question.lower().strip()
+        )
 
         explicit_reference = bool(
             re.search(
@@ -918,7 +1168,10 @@ class ForecastActionRouter:
     ) -> str:
         """Normalize and validate the employee question."""
 
-        if not isinstance(question, str):
+        if not isinstance(
+            question,
+            str,
+        ):
             return ""
 
         return " ".join(

@@ -1,0 +1,25 @@
+services:
+  finemed-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    container_name: finemed-pharmaai
+
+    ports:
+      - "8000:8000"
+
+    env_file:
+      - .env.production
+
+    environment:
+      PYTHONPATH: /app/src
+      DEMAND_FILE: /app/data/04_silver/demand_forecasting/daily_demand.parquet
+      FORECAST_DIR: /app/data/05_gold/demand_forecasting/production_forecasts
+      LATEST_FORECAST_FILE: /app/data/05_gold/demand_forecasting/production_forecasts/latest.parquet
+      RUN_STATUS_FILE: /app/data/run_status.json
+
+    volumes:
+      - ./data:/app/data
+
+    restart: unless-stopped
