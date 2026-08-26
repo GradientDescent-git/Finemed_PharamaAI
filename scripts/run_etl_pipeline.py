@@ -1,32 +1,58 @@
-from finemed_ai.config.paths import RAW_DATA_DIR
-from finemed_ai.extract.read_dat import read_all_months
-from finemed_ai.utils.logger import get_logger
+from __future__ import annotations
+
+import logging
+
+from finemed_ai.automation.monthly_pipeline import MonthlyPipeline
+from finemed_ai.config.settings import Settings
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
+)
+
+logger = logging.getLogger("run_etl_pipeline")
 
 
-logger = get_logger(__name__)
+def main() -> int:
+    """
+    Run the end-to-end 5-stage production pipeline:
+    Extraction (8 DAT files) -> Data Quality Validation -> Warehouse & Silver -> Gold Demand Forecasting -> Atomic Publication.
+    """
+    logger.info("Starting end-to-end Finemed PharmaAI production pipeline")
 
+    try:
+        settings = Settings()
+        pipeline = MonthlyPipeline(settings)
 
-def main():
-    logger.info("Pipeline started")
+        result = pipeline.run()
 
-    required_files = [
-        "INVOICE.DAT",
-        "INVDET.DAT",
-    ]
+        manifest = result["manifest"]
+        evaluation = result.get("evaluation")
+        alerts = result.get("alerts")
 
-    tables = read_all_months(
-        raw_data_dir=RAW_DATA_DIR,
-        required_files=required_files,
-    )
+        logger.info(
+            "Production pipeline completed | run_id=%s | published=%s | output=%s",
+            manifest.run_id,
+            manifest.published,
+            manifest.output_path,
+        )
 
-    logger.info("Extract completed")
+        if evaluation is not None:
+            logger.info("Evaluation metrics | WAPE=%.2f%%", evaluation.overall_wape_pct)
 
-    for table_name, df in tables.items():
-        logger.info("%s shape=%s", table_name, df.shape)
-        print(table_name, df.shape)
+        if alerts is not None:
+            logger.info("Operational alerts count | total=%d", alerts.total_alerts)
 
-    logger.info("Pipeline finished successfully")
+        if not manifest.published:
+            logger.error("Forecast publication failed")
+            return 1
+
+        return 0
+
+    except Exception:
+        logger.exception("Pipeline execution failed")
+        return 1
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
