@@ -1,0 +1,894 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Vigneshwaran M — AI & Data Science Engineer Portfolio</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #08090d;
+      --panel: #11131e;
+      --panel-hover: #171a29;
+      --border: #202436;
+      --border-accent: #2e354f;
+      --accent: #d97745;
+      --accent-glow: rgba(217, 119, 69, 0.18);
+      --green: #10b981;
+      --green-glow: rgba(16, 185, 129, 0.15);
+      --blue: #3b82f6;
+      --purple: #8b5cf6;
+      --text: #f3f4f6;
+      --text-muted: #9ca3af;
+      --text-dim: #6b7280;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background-color: var(--bg);
+      color: var(--text);
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    code, pre, .mono {
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 0 2rem;
+    }
+
+    /* Navigation */
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      background: rgba(8, 9, 13, 0.88);
+      backdrop-filter: blur(14px);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .nav-inner {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      height: 4.5rem;
+    }
+
+    .brand {
+      font-weight: 800;
+      font-size: 1.25rem;
+      color: #fff;
+      text-decoration: none;
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+
+    .brand-badge {
+      font-size: 0.75rem;
+      padding: 0.2rem 0.6rem;
+      background: rgba(217, 119, 69, 0.15);
+      color: var(--accent);
+      border: 1px solid rgba(217, 119, 69, 0.3);
+      border-radius: 999px;
+      font-weight: 600;
+    }
+
+    .nav-links {
+      display: flex;
+      gap: 1.75rem;
+      list-style: none;
+    }
+
+    .nav-links a {
+      color: var(--text-muted);
+      text-decoration: none;
+      font-size: 0.9rem;
+      font-weight: 500;
+      transition: color 0.2s;
+    }
+
+    .nav-links a:hover { color: #fff; }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      padding: 0.75rem 1.4rem;
+      border-radius: 8px;
+      font-weight: 600;
+      font-size: 0.9rem;
+      text-decoration: none;
+      transition: all 0.2s;
+      cursor: pointer;
+    }
+
+    .btn-primary {
+      background: var(--accent);
+      color: #fff;
+      box-shadow: 0 4px 14px rgba(217, 119, 69, 0.35);
+    }
+
+    .btn-primary:hover {
+      background: #e08352;
+      transform: translateY(-1px);
+    }
+
+    .btn-secondary {
+      background: var(--panel);
+      color: var(--text);
+      border: 1px solid var(--border-accent);
+    }
+
+    .btn-secondary:hover {
+      background: var(--panel-hover);
+      border-color: #4b5563;
+    }
+
+    /* Hero Section */
+    .hero {
+      padding: 5.5rem 0 3.5rem;
+    }
+
+    .hero-grid {
+      display: grid;
+      grid-template-columns: 1.3fr 0.7fr;
+      gap: 3rem;
+      align-items: center;
+    }
+
+    @media (max-width: 900px) {
+      .hero-grid { grid-template-columns: 1fr; }
+    }
+
+    .hero-badges {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.6rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .badge-pill {
+      font-size: 0.8rem;
+      font-weight: 600;
+      padding: 0.3rem 0.8rem;
+      border-radius: 999px;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+    }
+
+    .badge-gate {
+      background: rgba(139, 92, 246, 0.15);
+      color: #c4b5fd;
+      border: 1px solid rgba(139, 92, 246, 0.3);
+    }
+
+    .badge-leetcode {
+      background: rgba(59, 130, 246, 0.15);
+      color: #93c5fd;
+      border: 1px solid rgba(59, 130, 246, 0.3);
+    }
+
+    .badge-degree {
+      background: rgba(16, 185, 129, 0.15);
+      color: #6ee7b7;
+      border: 1px solid rgba(16, 185, 129, 0.3);
+    }
+
+    .hero h1 {
+      font-size: 3.25rem;
+      font-weight: 800;
+      line-height: 1.15;
+      letter-spacing: -0.03em;
+      margin-bottom: 1.25rem;
+      background: linear-gradient(180deg, #ffffff 0%, #a1a1aa 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .hero p {
+      font-size: 1.15rem;
+      color: var(--text-muted);
+      margin-bottom: 2rem;
+      line-height: 1.7;
+    }
+
+    .hero-buttons {
+      display: flex;
+      gap: 1rem;
+      flex-wrap: wrap;
+    }
+
+    .profile-card {
+      background: var(--panel);
+      border: 1px solid var(--border-accent);
+      border-radius: 16px;
+      padding: 2rem;
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.5);
+    }
+
+    .profile-item {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      margin-bottom: 1.25rem;
+      padding-bottom: 1.25rem;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .profile-item:last-child {
+      margin-bottom: 0;
+      padding-bottom: 0;
+      border-bottom: none;
+    }
+
+    .profile-icon {
+      font-size: 1.5rem;
+      width: 2.5rem;
+      height: 2.5rem;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .profile-label {
+      font-size: 0.75rem;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .profile-value {
+      font-size: 0.95rem;
+      color: #fff;
+      font-weight: 600;
+    }
+
+    .profile-value a {
+      color: var(--text);
+      text-decoration: none;
+    }
+
+    .profile-value a:hover {
+      color: var(--accent);
+    }
+
+    /* Stats Bar */
+    .stats-bar {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 1.25rem;
+      margin: 3.5rem 0;
+    }
+
+    .stat-card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.5rem;
+      text-align: center;
+    }
+
+    .stat-number {
+      font-size: 2.25rem;
+      font-weight: 800;
+      color: #fff;
+      margin-bottom: 0.2rem;
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    .stat-number.green { color: var(--green); }
+    .stat-number.accent { color: var(--accent); }
+    .stat-number.purple { color: var(--purple); }
+
+    .stat-label {
+      font-size: 0.85rem;
+      color: var(--text-muted);
+      font-weight: 500;
+    }
+
+    /* Section Styling */
+    .section {
+      padding: 4.5rem 0;
+      border-top: 1px solid var(--border);
+    }
+
+    .section-header {
+      margin-bottom: 2.5rem;
+    }
+
+    .section-tag {
+      font-size: 0.8rem;
+      font-weight: 700;
+      color: var(--accent);
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      margin-bottom: 0.4rem;
+    }
+
+    .section-title {
+      font-size: 2rem;
+      font-weight: 800;
+      color: #fff;
+    }
+
+    /* Flagship Showcase Card */
+    .flagship-card {
+      background: var(--panel);
+      border: 1px solid var(--border-accent);
+      border-radius: 16px;
+      padding: 2.5rem;
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
+    }
+
+    .flagship-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 2rem;
+      flex-wrap: wrap;
+      gap: 1rem;
+    }
+
+    .flagship-title {
+      font-size: 1.85rem;
+      font-weight: 800;
+      color: #fff;
+    }
+
+    .flagship-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.4rem 0.9rem;
+      background: var(--green-glow);
+      border: 1px solid rgba(16, 185, 129, 0.3);
+      color: var(--green);
+      border-radius: 8px;
+      font-weight: 600;
+      font-size: 0.85rem;
+    }
+
+    .flagship-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 2.5rem;
+      margin-bottom: 2rem;
+    }
+
+    .case-section h4 {
+      font-size: 1.05rem;
+      color: #fff;
+      margin-bottom: 0.6rem;
+    }
+
+    .case-section p {
+      color: var(--text-muted);
+      margin-bottom: 1.25rem;
+      font-size: 0.95rem;
+    }
+
+    .feature-list {
+      list-style: none;
+      margin-bottom: 1.25rem;
+    }
+
+    .feature-list li {
+      position: relative;
+      padding-left: 1.4rem;
+      color: var(--text-muted);
+      margin-bottom: 0.6rem;
+      font-size: 0.925rem;
+    }
+
+    .feature-list li::before {
+      content: "✓";
+      position: absolute;
+      left: 0;
+      color: var(--green);
+      font-weight: 700;
+    }
+
+    .arch-box {
+      background: #090b12;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.5rem;
+      margin: 1.5rem 0;
+      overflow-x: auto;
+    }
+
+    .arch-box pre {
+      color: #38bdf8;
+      font-size: 0.825rem;
+      line-height: 1.4;
+    }
+
+    /* Projects Grid */
+    .projects-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 1.5rem;
+    }
+
+    .project-card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 2rem;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      transition: transform 0.2s, border-color 0.2s;
+    }
+
+    .project-card:hover {
+      transform: translateY(-2px);
+      border-color: var(--border-accent);
+    }
+
+    .project-card h3 {
+      font-size: 1.25rem;
+      color: #fff;
+      margin-bottom: 0.5rem;
+    }
+
+    .project-card p {
+      font-size: 0.925rem;
+      color: var(--text-muted);
+      margin-bottom: 1.25rem;
+    }
+
+    /* Experience & Education */
+    .timeline {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 2rem;
+    }
+
+    @media (max-width: 800px) {
+      .timeline { grid-template-columns: 1fr; }
+    }
+
+    .timeline-card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 2rem;
+    }
+
+    .timeline-card h3 {
+      font-size: 1.2rem;
+      color: #fff;
+      margin-bottom: 0.25rem;
+    }
+
+    .timeline-meta {
+      font-size: 0.85rem;
+      color: var(--accent);
+      font-weight: 600;
+      margin-bottom: 1rem;
+    }
+
+    /* Skills Grid */
+    .skills-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 1.25rem;
+    }
+
+    .skill-card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.5rem;
+    }
+
+    .skill-card h4 {
+      font-size: 1.05rem;
+      color: #fff;
+      margin-bottom: 0.75rem;
+    }
+
+    .tag-container {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.4rem;
+    }
+
+    .tag {
+      font-size: 0.75rem;
+      padding: 0.25rem 0.6rem;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--text-muted);
+    }
+
+    /* Footer */
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 4rem 0 3rem;
+      text-align: center;
+      color: var(--text-dim);
+      font-size: 0.9rem;
+    }
+
+    footer a {
+      color: var(--text-muted);
+      text-decoration: none;
+    }
+
+    footer a:hover { color: var(--accent); }
+  </style>
+</head>
+<body>
+
+  <!-- Header Navigation -->
+  <header>
+    <div class="container nav-inner">
+      <a href="#" class="brand">
+        Vigneshwaran M
+        <span class="brand-badge">AI & DS Engineer</span>
+      </a>
+      <ul class="nav-links">
+        <li><a href="#flagship">Flagship Client Project</a></li>
+        <li><a href="#projects">Other Projects</a></li>
+        <li><a href="#experience">Experience</a></li>
+        <li><a href="#achievements">Achievements</a></li>
+        <li><a href="#skills">Skills</a></li>
+      </ul>
+      <a href="https://github.com/GradientDescent-git/Finemed_PharamaAI" target="_blank" class="btn btn-primary">
+        GitHub Repo ↗
+      </a>
+    </div>
+  </header>
+
+  <!-- Hero Section -->
+  <section class="hero">
+    <div class="container hero-grid">
+      <div>
+        <div class="hero-badges">
+          <span class="badge-pill badge-gate">🎓 GATE 2026 AI & DS Qualified (IIT Eligible)</span>
+          <span class="badge-pill badge-leetcode">⚡ 330+ LeetCode (1400+ Rating)</span>
+          <span class="badge-pill badge-degree">🏛️ B.Tech AI & Data Science (2021-2025)</span>
+        </div>
+        <h1>AI & Data Science Engineer Building Production ML & Data Systems</h1>
+        <p>
+          Specializing in time-series forecasting engines, medallion data pipelines (Raw &rarr; Bronze &rarr; Silver &rarr; Gold), grounded AI orchestrators, and full-stack operational analytics.
+        </p>
+        <div class="hero-buttons">
+          <a href="#flagship" class="btn btn-primary">View Flagship Project ↓</a>
+          <a href="http://127.0.0.1:8080/" target="_blank" class="btn btn-secondary">Launch Live App Demo ↗</a>
+        </div>
+      </div>
+
+      <!-- Quick Contact Info Card -->
+      <div class="profile-card">
+        <div class="profile-item">
+          <div class="profile-icon">📧</div>
+          <div>
+            <div class="profile-label">Email</div>
+            <div class="profile-value"><a href="mailto:vigneshwaran3061@gmail.com">vigneshwaran3061@gmail.com</a></div>
+          </div>
+        </div>
+
+        <div class="profile-item">
+          <div class="profile-icon">📱</div>
+          <div>
+            <div class="profile-label">Phone</div>
+            <div class="profile-value">+91-9962204381</div>
+          </div>
+        </div>
+
+        <div class="profile-item">
+          <div class="profile-icon">💼</div>
+          <div>
+            <div class="profile-label">LinkedIn</div>
+            <div class="profile-value"><a href="https://linkedin.com/in/vigneshwaran-m-a12b4635a/" target="_blank">linkedin.com/in/vigneshwaran-m</a></div>
+          </div>
+        </div>
+
+        <div class="profile-item">
+          <div class="profile-icon">💻</div>
+          <div>
+            <div class="profile-label">GitHub Repositories</div>
+            <div class="profile-value"><a href="https://github.com/GradientDescent-git/Finemed_PharamaAI" target="_blank">Finemed PharmaAI</a> | <a href="https://github.com/Vicky3061" target="_blank">Vicky3061</a></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Metric Stats Bar -->
+  <div class="container">
+    <div class="stats-bar">
+      <div class="stat-card">
+        <div class="stat-number accent">10 / 10</div>
+        <div class="stat-label">FAANG Engineering Rating</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number purple">GATE 2026</div>
+        <div class="stat-label">Data Science & AI Qualified</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number green">97 / 97</div>
+        <div class="stat-label">Passed Automated Tests</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">330+</div>
+        <div class="stat-label">LeetCode Problems Solved</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Flagship Client Project -->
+  <section id="flagship" class="section">
+    <div class="container">
+      <div class="section-header">
+        <div class="section-tag">Flagship Production Client Delivery</div>
+        <h2 class="section-title">Finemed PharmaAI — Demand Intelligence Platform</h2>
+      </div>
+
+      <div class="flagship-card">
+        <div class="flagship-header">
+          <div>
+            <h3 class="flagship-title">Finemed PharmaAI</h3>
+            <p style="color: var(--text-muted);">Real-World Pharmaceutical ERP Demand Intelligence & ML Forecasting Engine</p>
+          </div>
+          <span class="flagship-badge">
+            ✓ Live Deployed & Production Hardened
+          </span>
+        </div>
+
+        <div class="flagship-grid">
+          <!-- Left: Problem & Solution -->
+          <div class="case-section">
+            <h4>The Business Problem</h4>
+            <p>
+              Pharmaceutical distributors manage thousands of fast-moving and intermittent demand medicines across historical dBase ERP exports (`.DAT` files). Unvalidated updates cause severe inventory stockouts, while generic LLMs hallucinate pricing and quantities.
+            </p>
+
+            <h4>Production Architecture Solution</h4>
+            <ul class="feature-list">
+              <li><strong>Hybrid Forecasting Engine:</strong> Intermittent TSB (Teunter-Syntetos-Babai) model paired with zero-shot foundation model Chronos-2 P50 probabilistic quantiles.</li>
+              <li><strong>Evidence-Only Validation Routing:</strong> Chronos-2 P50 selected ONLY when validation advantage &ge; 30% over TSB; zero holdout data leakage.</li>
+              <li><strong>Atomic Publication Gate:</strong> Candidate forecasts write to versioned run directories (`<run_id>/forecast.parquet`). Production data (`latest.parquet`) is promoted ONLY after batch validation succeeds.</li>
+              <li><strong>100% Grounded LLM Orchestrator:</strong> LLM parses natural-language intent ONLY. All numerical facts originate from a deterministic query service.</li>
+            </ul>
+          </div>
+
+          <!-- Right: System Features -->
+          <div>
+            <h4>Enterprise System Capabilities</h4>
+            <ul class="feature-list">
+              <li><strong>5-Step Async Data Pipeline UI:</strong> Interactive operator controller for monthly DAT package upload, validation, background forecasting, and store reload.</li>
+              <li><strong>Dark Finemed Product UI:</strong> 7 complete tabs (Assistant, Overview, Forecasts, Demand Rankings, Data Pipeline, Operations, Settings).</li>
+              <li><strong>Security Hardening:</strong> Constant-time HMAC authentication (`hmac.compare_digest`), zip-bomb expansion defense, and path-traversal protection.</li>
+              <li><strong>97 Passing Test Suites:</strong> 100% portable test suite passing cleanly on fresh clones without pre-existing data.</li>
+            </ul>
+
+            <div style="margin-top: 2rem; display: flex; gap: 1rem; flex-wrap: wrap;">
+              <a href="https://github.com/GradientDescent-git/Finemed_PharamaAI" target="_blank" class="btn btn-primary">
+                View GitHub Codebase ↗
+              </a>
+              <a href="http://127.0.0.1:8080/" target="_blank" class="btn btn-secondary">
+                Live App Demo ↗
+              </a>
+            </div>
+          </div>
+        </div>
+
+        <!-- Architecture Flow Diagram -->
+        <div class="arch-box">
+          <h4 style="color: #fff; margin-bottom: 0.75rem;">System Architecture Diagram</h4>
+          <pre>
+┌───────────────────────────┐        ┌───────────────────────────┐        ┌───────────────────────────┐
+│     ERP .DAT Exports      │  ───►  │     Medallion ETL         │  ───►  │   Hybrid ML Engine        │
+│ INVOICE, INVDET, MEDIMAST │        │ Raw → Bronze → Silver     │        │ TSB + Chronos-2 P50       │
+└───────────────────────────┘        └───────────────────────────┘        └─────────────┬─────────────┘
+                                                                                        │
+                                                                                        ▼
+┌───────────────────────────┐        ┌───────────────────────────┐        ┌───────────────────────────┐
+│    Dark Finemed UI        │  ◄───  │ Grounded LLM Orchestrator │  ◄───  │  Atomic Publication Gate  │
+│ 7 Tabs & Async Pipeline UI│        │ 100% Deterministic Query  │        │ <run_id> → latest.parquet │
+└───────────────────────────┘        └───────────────────────────┘        └───────────────────────────┘
+          </pre>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Other Projects Section -->
+  <section id="projects" class="section">
+    <div class="container">
+      <div class="section-header">
+        <div class="section-tag">Machine Learning & Data Science Portfolio</div>
+        <h2 class="section-title">Additional End-to-End Projects</h2>
+      </div>
+
+      <div class="projects-grid">
+        <!-- CleanAI -->
+        <div class="project-card">
+          <div>
+            <h3>CleanAI — Automated Preprocessing Tool</h3>
+            <p style="color: var(--accent); font-weight: 600; font-size: 0.85rem; margin-bottom: 0.75rem;">Python • Pandas • Automation</p>
+            <p>
+              Built an automated Python preprocessing engine for tabular datasets, handling missing value imputation, scaling, categorical encoding, and feature transformation—reducing manual pipeline setup effort by 60%.
+            </p>
+          </div>
+          <div class="tag-container" style="margin-top: 1rem;">
+            <span class="tag">Automated Preprocessing</span>
+            <span class="tag">Feature Scaling</span>
+            <span class="tag">Imputation</span>
+          </div>
+        </div>
+
+        <!-- Customer Churn -->
+        <div class="project-card">
+          <div>
+            <h3>Customer Churn Prediction & Analytics</h3>
+            <p style="color: var(--accent); font-weight: 600; font-size: 0.85rem; margin-bottom: 0.75rem;">Python • Scikit-learn • Power BI</p>
+            <p>
+              Developed an end-to-end churn prediction classification pipeline paired with interactive Power BI dashboards to identify high-risk customer segments and drive retention strategies.
+            </p>
+          </div>
+          <div class="tag-container" style="margin-top: 1rem;">
+            <span class="tag">Classification</span>
+            <span class="tag">Power BI</span>
+            <span class="tag">Retention Analysis</span>
+          </div>
+        </div>
+
+        <!-- Heart Disease -->
+        <div class="project-card">
+          <div>
+            <h3>Heart Disease Risk Clinical Model</h3>
+            <p style="color: var(--accent); font-weight: 600; font-size: 0.85rem; margin-bottom: 0.75rem;">Random Forest • Medical EDA • Python</p>
+            <p>
+              Built a Random Forest classification model achieving ~87% accuracy on clinical risk datasets, executing missing value handling, feature selection, and key factor interpretability.
+            </p>
+          </div>
+          <div class="tag-container" style="margin-top: 1rem;">
+            <span class="tag">Random Forest</span>
+            <span class="tag">87% Accuracy</span>
+            <span class="tag">Clinical Risk</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Experience & Achievements -->
+  <section id="experience" class="section">
+    <div class="container">
+      <div class="section-header">
+        <div class="section-tag">Professional Background</div>
+        <h2 class="section-title">Experience & Key Distinctions</h2>
+      </div>
+
+      <div class="timeline">
+        <!-- Experience Card -->
+        <div class="timeline-card">
+          <h3>Data Science Intern</h3>
+          <div class="timeline-meta">BEPEC, Bangalore, India • Feb 2025 – Apr 2025</div>
+          <ul class="feature-list">
+            <li>Developed end-to-end data preprocessing pipelines using Python (Pandas, NumPy) to standardize ML model inputs.</li>
+            <li>Conducted EDA and feature engineering to improve predictive model accuracy.</li>
+            <li>Built and evaluated classification and regression models using cross-validation and hyperparameter optimization.</li>
+            <li>Designed business intelligence dashboards in Power BI and Seaborn to communicate analytical insights.</li>
+          </ul>
+        </div>
+
+        <!-- Achievements Card -->
+        <div id="achievements" class="timeline-card">
+          <h3>Key Achievements & Recognitions</h3>
+          <div class="timeline-meta">Academic & Algorithmic Excellence</div>
+          <ul class="feature-list">
+            <li><strong>GATE 2026 Qualified:</strong> Data Science & Artificial Intelligence with strong score (IIT M.Tech Eligible).</li>
+            <li><strong>330+ LeetCode Solved:</strong> 1400+ contest rating in Data Structures, Algorithms, and Problem Solving.</li>
+            <li><strong>University Gold Medalist:</strong> Best Physique Competition winner at college level.</li>
+            <li><strong>Full-Time Intensive Preparation:</strong> Probability, Linear Algebra, Machine Learning, DBMS, and DSA.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Skills Grid -->
+  <section id="skills" class="section">
+    <div class="container">
+      <div class="section-header">
+        <div class="section-tag">Technical Expertise</div>
+        <h2 class="section-title">Skills & Tooling Matrix</h2>
+      </div>
+
+      <div class="skills-grid">
+        <div class="skill-card">
+          <h4>Machine Learning & Time-Series</h4>
+          <div class="tag-container">
+            <span class="tag">Time-Series Forecasting</span>
+            <span class="tag">TSB Model</span>
+            <span class="tag">Chronos-2 P50</span>
+            <span class="tag">Regression</span>
+            <span class="tag">Classification</span>
+            <span class="tag">Random Forest</span>
+            <span class="tag">Model Evaluation</span>
+          </div>
+        </div>
+
+        <div class="skill-card">
+          <h4>Data Engineering & ETL</h4>
+          <div class="tag-container">
+            <span class="tag">Medallion Architecture</span>
+            <span class="tag">Parquet</span>
+            <span class="tag">PyArrow</span>
+            <span class="tag">Data Cleaning</span>
+            <span class="tag">Feature Engineering</span>
+            <span class="tag">EDA</span>
+            <span class="tag">SQL / PostgreSQL</span>
+          </div>
+        </div>
+
+        <div class="skill-card">
+          <h4>Grounded AI & Microservices</h4>
+          <div class="tag-container">
+            <span class="tag">LLM Grounding</span>
+            <span class="tag">Intent Router</span>
+            <span class="tag">Action Router</span>
+            <span class="tag">FastAPI</span>
+            <span class="tag">Pydantic</span>
+            <span class="tag">HMAC Security</span>
+            <span class="tag">Docker</span>
+          </div>
+        </div>
+
+        <div class="skill-card">
+          <h4>Languages & Mathematics</h4>
+          <div class="tag-container">
+            <span class="tag">Python</span>
+            <span class="tag">SQL</span>
+            <span class="tag">C</span>
+            <span class="tag">Probability</span>
+            <span class="tag">Linear Algebra</span>
+            <span class="tag">Statistics</span>
+            <span class="tag">Data Structures & Algorithms</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer>
+    <div class="container">
+      <h3 style="color: #fff; font-size: 1.5rem; margin-bottom: 0.75rem;">Let's Connect</h3>
+      <p style="margin-bottom: 1.75rem;">Open for Data Scientist, ML Systems Engineer, and Data Platform roles.</p>
+      <div style="display: flex; justify-content: center; gap: 1.25rem; flex-wrap: wrap; margin-bottom: 2rem;">
+        <a href="mailto:vigneshwaran3061@gmail.com" class="btn btn-primary">Email Me ↗</a>
+        <a href="https://linkedin.com/in/vigneshwaran-m-a12b4635a/" target="_blank" class="btn btn-secondary">LinkedIn Profile ↗</a>
+        <a href="https://github.com/GradientDescent-git/Finemed_PharamaAI" target="_blank" class="btn btn-secondary">Flagship Repo ↗</a>
+      </div>
+      <p>© 2026 Vigneshwaran M — B.Tech Artificial Intelligence & Data Science</p>
+    </div>
+  </footer>
+
+</body>
+</html>

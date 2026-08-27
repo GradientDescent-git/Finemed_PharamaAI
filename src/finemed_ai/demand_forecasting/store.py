@@ -207,40 +207,14 @@ class ForecastStore:
         """
 
         if not self.latest_path.exists():
-
             logger.warning(
-                "No forecast file exists at %s. "
-                "ForecastStore remains empty.",
+                "No forecast file exists at %s. ForecastStore remains unavailable.",
                 self.latest_path,
             )
-
-            # Startup without an artifact is allowed.
-            # Never destroy an existing valid state on later disappearance.
-            if self._df is None or self._df.empty:
-                dates = pd.date_range("2026-05-31", periods=30, freq="D")
-                rows = []
-                for m_id in ["1", "2"]:
-                    for d in dates:
-                        rows.append(
-                            {
-                                "Medicine_ID": m_id,
-                                "Forecast_Date": d,
-                                "Predicted_Demand": 100.0,
-                                "P10": 50.0,
-                                "P50": 100.0,
-                                "P90": 150.0,
-                                "Context_Length_Used": 730,
-                                "Prediction_Length": 30,
-                                "Selected_Model": "tsb",
-                                "Generated_At": datetime.now(),
-                                "Eligibility_Status": "ACTIVE",
-                                "Forecast_Status": "FORECASTED",
-                            }
-                        )
-                self._df = pd.DataFrame(rows)
-                self._artifact_signature = None
-
+            self._df = None
+            self._artifact_signature = None
             return
+
 
 
         if not self.latest_path.is_file():
@@ -304,6 +278,15 @@ class ForecastStore:
             ].nunique(),
             self.latest_path,
         )
+
+    def is_available(self) -> bool:
+        """Return True if store contains valid, non-empty production forecast data."""
+        return self._df is not None and not self._df.empty
+
+    def is_empty(self) -> bool:
+        """Return True if store is empty or unavailable."""
+        return not self.is_available()
+
 
     # ==================================================================
     # Data preparation

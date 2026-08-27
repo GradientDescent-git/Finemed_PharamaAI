@@ -382,8 +382,19 @@ app.add_middleware(
         "X-API-Key",
         "X-Admin-Token",
         "X-Conversation-ID",
+        "X-Request-ID",
     ],
 )
+
+
+@app.middleware("http")
+async def add_request_id_middleware(request: Request, call_next):
+    req_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
+    request.state.request_id = req_id
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = req_id
+    return response
+
 
 
 # ============================================================================
@@ -446,42 +457,31 @@ def get_store() -> ForecastStore:
     has changed.
     """
 
-    if _store is None:
-
+    if _store is None or not _store.is_available():
         raise HTTPException(
             status_code=503,
-            detail=(
-                "Forecast store is not initialized."
-            ),
+            detail="Forecast data is not currently available",
         )
 
     try:
-
         if _store.is_stale():
-
-            logger.info(
-                "Forecast store is stale. Reloading."
-            )
-
+            logger.info("Forecast store is stale. Reloading.")
             _store.reload()
-
     except Exception:
-
-        logger.exception(
-            (
-                "Failed while checking or "
-                "reloading forecast store"
-            )
-        )
-
+        logger.exception("Failed while checking or reloading forecast store")
         raise HTTPException(
             status_code=503,
-            detail=(
-                "Forecast data is temporarily unavailable."
-            ),
+            detail="Forecast data is not currently available",
+        )
+
+    if not _store.is_available():
+        raise HTTPException(
+            status_code=503,
+            detail="Forecast data is not currently available",
         )
 
     return _store
+
 
 
 def get_orchestrator() -> Any:
@@ -867,7 +867,7 @@ def ready() -> dict[str, Any]:
     """
     Return API readiness status for load balancers and orchestrators.
     """
-    store_loaded = _store is not None and not _store.is_empty()
+    store_loaded = _store is not None and _store.is_available()
     orchestrator_loaded = _orchestrator is not None
 
     if not store_loaded:
@@ -883,6 +883,7 @@ def ready() -> dict[str, Any]:
         "orchestrator_ready": orchestrator_loaded,
         "detail": "Production forecast store is ready.",
     }
+
 
 
 

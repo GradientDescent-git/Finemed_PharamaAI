@@ -24,8 +24,13 @@ class MedicineResolver:
     NAME_COLUMNS = ("MDNAME", "Product_Display_Name")
 
     def __init__(self, medicines: pd.DataFrame) -> None:
-        if medicines.empty:
-            raise ValueError("Medicine master cannot be empty.")
+        if medicines is None or medicines.empty:
+            self.medicines = pd.DataFrame(columns=[self.CODE_COLUMN] + list(self.NAME_COLUMNS))
+            self._code_index = {}
+            self._display_name_index = {}
+            self._normalized_index = {}
+            return
+
 
         required_columns = {self.CODE_COLUMN}
         missing = required_columns - set(medicines.columns)

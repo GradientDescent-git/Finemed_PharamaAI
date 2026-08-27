@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
 from pathlib import Path
-
 import pandas as pd
 
 logger = logging.getLogger(__name__)
@@ -13,9 +11,9 @@ class ForecastRepository:
     """
     Read-only access layer for validated demand forecasting artifacts.
 
-    If artifact files are missing (e.g. on a fresh clone or test environment),
-    this repository provides valid fallback default data structures to ensure
-    CI test portability and seamless application execution out of the box.
+    If artifact files are missing, this repository returns empty DataFrames
+    and flags `is_available() == False` to ensure honest failure handling without
+    generating synthetic fallback data.
     """
 
     def __init__(
@@ -34,136 +32,53 @@ class ForecastRepository:
         self.routing_path = Path(routing_path)
         self.medicine_path = Path(medicine_path)
 
-    @staticmethod
-    def _create_default_forecasts() -> pd.DataFrame:
-        dates = pd.date_range("2026-05-31", periods=30, freq="D")
-        rows = []
-        for m_id in ["0001", "0002"]:
-            for d in dates:
-                rows.append(
-                    {
-                        "Medicine_ID": m_id,
-                        "Forecast_Date": d,
-                        "Predicted_Demand": 100.0,
-                        "P10": 50.0,
-                        "P50": 100.0,
-                        "P90": 150.0,
-                        "Context_Length_Used": 730,
-                        "Prediction_Length": 30,
-                        "Selected_Model": "tsb",
-                        "Generated_At": datetime.now(),
-                        "Eligibility_Status": "ACTIVE",
-                        "Forecast_Status": "FORECASTED",
-                    }
-                )
-        return pd.DataFrame(rows)
-
-    @staticmethod
-    def _create_default_routing() -> pd.DataFrame:
-        return pd.DataFrame(
-            [
-                {
-                    "Medicine_ID": "0001",
-                    "Selected_Model": "tsb",
-                    "Routing_Reason": "TSB default fallback",
-                    "Chronos_Advantage_Pct": 0.0,
-                },
-                {
-                    "Medicine_ID": "0002",
-                    "Selected_Model": "tsb",
-                    "Routing_Reason": "TSB default fallback",
-                    "Chronos_Advantage_Pct": 0.0,
-                },
-            ]
-        )
-
-    @staticmethod
-    def _create_default_medicines() -> pd.DataFrame:
-        return pd.DataFrame(
-            [
-                {
-                    "MDCODE": "0001",
-                    "MDNAME": "OTACARE EAR DROPS 5ML",
-                    "Product_Display_Name": "OTACARE EAR DROPS 5ML",
-                    "SUPNO": "S001",
-                    "PACKG": "5ML",
-                },
-                {
-                    "MDCODE": "0002",
-                    "MDNAME": "KEELAC EYE DROPS 5ML",
-                    "Product_Display_Name": "KEELAC EYE DROPS 5ML",
-                    "SUPNO": "S001",
-                    "PACKG": "5ML",
-                },
-            ]
-        )
-
+    def is_available(self) -> bool:
+        """Return True if production forecast artifact exists and is non-empty."""
+        if not self.forecast_path.exists() or not self.forecast_path.is_file():
+            return False
+        try:
+            return self.forecast_path.stat().st_size > 0
+        except Exception:
+            return False
 
     def load_forecasts(self) -> pd.DataFrame:
-        """Load currently promoted production forecast or fallback default."""
+        """Load currently promoted production forecast or empty DataFrame."""
         if not self.forecast_path.exists():
-            logger.warning(
-                "Production forecast file not found at %s. Using default fallback dataset.",
-                self.forecast_path,
-            )
-            return self._create_default_forecasts()
+            logger.warning("Production forecast file not found at %s.", self.forecast_path)
+            return pd.DataFrame()
 
         try:
             df = pd.read_parquet(self.forecast_path)
-            if df.empty:
-                return self._create_default_forecasts()
-            return df.copy()
+            return df.copy() if not df.empty else pd.DataFrame()
         except Exception as exc:
-            logger.warning(
-                "Could not load production forecast from %s: %s. Using default dataset.",
-                self.forecast_path,
-                exc,
-            )
-            return self._create_default_forecasts()
+            logger.warning("Could not load production forecast from %s: %s", self.forecast_path, exc)
+            return pd.DataFrame()
 
     def load_routing(self) -> pd.DataFrame:
-        """Load production model routing decisions or fallback default."""
+        """Load production model routing decisions or empty DataFrame."""
         if not self.routing_path.exists():
-            logger.warning(
-                "Production routing table not found at %s. Using default fallback dataset.",
-                self.routing_path,
-            )
-            return self._create_default_routing()
+            logger.warning("Production routing table not found at %s.", self.routing_path)
+            return pd.DataFrame()
 
         try:
             df = pd.read_parquet(self.routing_path)
-            if df.empty:
-                return self._create_default_routing()
-            return df.copy()
+            return df.copy() if not df.empty else pd.DataFrame()
         except Exception as exc:
-            logger.warning(
-                "Could not load production routing table from %s: %s. Using default dataset.",
-                self.routing_path,
-                exc,
-            )
-            return self._create_default_routing()
+            logger.warning("Could not load production routing table from %s: %s", self.routing_path, exc)
+            return pd.DataFrame()
 
     def load_medicines(self) -> pd.DataFrame:
-        """Load medicine master data or fallback default."""
+        """Load medicine master data or empty DataFrame."""
         if not self.medicine_path.exists():
-            logger.warning(
-                "Medicine master file not found at %s. Using default fallback dataset.",
-                self.medicine_path,
-            )
-            return self._create_default_medicines()
+            logger.warning("Medicine master file not found at %s.", self.medicine_path)
+            return pd.DataFrame()
 
         try:
             df = pd.read_parquet(self.medicine_path)
-            if df.empty:
-                return self._create_default_medicines()
-            return df.copy()
+            return df.copy() if not df.empty else pd.DataFrame()
         except Exception as exc:
-            logger.warning(
-                "Could not load medicine master from %s: %s. Using default dataset.",
-                self.medicine_path,
-                exc,
-            )
-            return self._create_default_medicines()
+            logger.warning("Could not load medicine master from %s: %s", self.medicine_path, exc)
+            return pd.DataFrame()
 
     def load_all(self) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         """Load all intelligence artifacts."""

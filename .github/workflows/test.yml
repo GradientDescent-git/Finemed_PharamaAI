@@ -1,4 +1,4 @@
-name: Tests
+name: Tests & Deployment Verification
 
 on:
   push:
@@ -26,5 +26,8 @@ jobs:
           pip install pandas pyarrow pydantic fastapi "uvicorn[standard]" httpx pytest anthropic python-multipart python-dotenv sqlalchemy psycopg2-binary schedule dbfread
           pip install -e . --no-deps
 
-      - name: Run test suite
+      - name: Run unit, integration & failure test matrix
         run: pytest tests/ -v
+
+      - name: Run automated deployment verification
+        run: python scripts/verify_deployment.py

@@ -888,11 +888,15 @@ class ForecastQueryService:
 
         data = forecast.copy()
 
+        if data.empty:
+            return pd.DataFrame(columns=list(cls.FORECAST_REQUIRED_COLUMNS))
+
         cls._require_columns(
             data,
             cls.FORECAST_REQUIRED_COLUMNS,
             artifact_name="forecast",
         )
+
 
         data["Medicine_ID"] = (
             data["Medicine_ID"]
@@ -996,11 +1000,15 @@ class ForecastQueryService:
 
         data = medicines.copy()
 
+        if data.empty:
+            return pd.DataFrame(columns=list(cls.MEDICINE_REQUIRED_COLUMNS))
+
         cls._require_columns(
             data,
             cls.MEDICINE_REQUIRED_COLUMNS,
             artifact_name="medicine master",
         )
+
 
         data["MDCODE"] = (
             data["MDCODE"]
