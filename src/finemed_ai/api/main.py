@@ -161,38 +161,46 @@ _pipeline_running = False
 # Environment helpers
 # ============================================================================
 
-def get_admin_token() -> Optional[str]:
+def get_admin_token() -> str:
     """
     Resolve the admin token at request time.
+
+    A production deployment must explicitly configure ADMIN_TOKEN.
+    The application must not fall back to a known hardcoded credential.
     """
     value = os.environ.get(
         "ADMIN_TOKEN",
-        "FinemedAI_2026",
-    )
+        "",
+    ).strip()
 
-    if value is None:
-        return "FinemedAI_2026"
+    if not value:
+        raise RuntimeError(
+            "ADMIN_TOKEN is not configured. "
+            "Set ADMIN_TOKEN in the deployment environment."
+        )
 
-    value = value.strip()
-
-    return value or "FinemedAI_2026"
+    return value
 
 
-def get_client_api_key() -> Optional[str]:
+def get_client_api_key() -> str:
     """
     Resolve the client API key at request time.
+
+    A production deployment must explicitly configure CLIENT_API_KEY.
+    The application must not fall back to a known hardcoded credential.
     """
     value = os.environ.get(
         "CLIENT_API_KEY",
-        "FinemedAI_2026",
-    )
+        "",
+    ).strip()
 
-    if value is None:
-        return "FinemedAI_2026"
+    if not value:
+        raise RuntimeError(
+            "CLIENT_API_KEY is not configured. "
+            "Set CLIENT_API_KEY in the deployment environment."
+        )
 
-    value = value.strip()
-
-    return value or "FinemedAI_2026"
+    return value
 
 
 
@@ -2317,4 +2325,4 @@ def operations_summary():
         "freshness": freshness,
         "pipeline_running": _pipeline_running,
         "active_alerts_count": 0,
-    }
+    }
