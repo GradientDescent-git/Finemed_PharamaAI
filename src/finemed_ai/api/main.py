@@ -520,19 +520,20 @@ def require_admin(
     Guard administrative endpoints.
     """
 
-    admin_token = get_admin_token()
-
-    if not admin_token:
-
-        logger.error(
-            "ADMIN_TOKEN is not configured."
-        )
-
+    try:
+        admin_token = get_admin_token()
+    except RuntimeError:
+        logger.error("ADMIN_TOKEN is not configured.")
         raise HTTPException(
             status_code=503,
-            detail=(
-                "Admin access is not configured."
-            ),
+            detail="Admin access is not configured.",
+        )
+
+    if not admin_token:
+        logger.error("ADMIN_TOKEN is not configured.")
+        raise HTTPException(
+            status_code=503,
+            detail="Admin access is not configured.",
         )
 
     if (
@@ -542,7 +543,6 @@ def require_admin(
             admin_token,
         )
     ):
-
         raise HTTPException(
             status_code=401,
             detail="Invalid admin token.",
@@ -559,19 +559,20 @@ def require_client_auth(
     Guard staff-facing forecast and conversation endpoints.
     """
 
-    client_api_key = get_client_api_key()
-
-    if not client_api_key:
-
-        logger.error(
-            "CLIENT_API_KEY is not configured."
-        )
-
+    try:
+        client_api_key = get_client_api_key()
+    except RuntimeError:
+        logger.error("CLIENT_API_KEY is not configured.")
         raise HTTPException(
             status_code=503,
-            detail=(
-                "Client access is not configured."
-            ),
+            detail="Client access is not configured.",
+        )
+
+    if not client_api_key:
+        logger.error("CLIENT_API_KEY is not configured.")
+        raise HTTPException(
+            status_code=503,
+            detail="Client access is not configured.",
         )
 
     if (
@@ -581,7 +582,6 @@ def require_client_auth(
             client_api_key,
         )
     ):
-
         raise HTTPException(
             status_code=401,
             detail="Invalid or missing API key.",

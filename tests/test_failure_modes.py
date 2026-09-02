@@ -42,6 +42,13 @@ def test_invalid_api_key_returns_401(client):
     assert res.status_code == 401
 
 
+def test_unconfigured_api_key_returns_503(client, monkeypatch):
+    """Assert requests when CLIENT_API_KEY is absent return 503 Service Unavailable."""
+    monkeypatch.delenv("CLIENT_API_KEY", raising=False)
+    res = client.get("/forecast/top", headers={"X-API-Key": "test-key"})
+    assert res.status_code == 503
+
+
 def test_drift_detector_handles_empty_inputs():
     """Assert DemandDriftDetector gracefully handles empty DataFrames."""
     detector = DemandDriftDetector()

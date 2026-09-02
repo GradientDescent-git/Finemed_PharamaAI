@@ -27,7 +27,13 @@ jobs:
           pip install -e . --no-deps
 
       - name: Run unit, integration & failure test matrix
+        env:
+          CLIENT_API_KEY: test-client-key
+          ADMIN_TOKEN: test-admin-token
         run: pytest tests/ -v
 
       - name: Run automated deployment verification
+        env:
+          CLIENT_API_KEY: test-client-key
+          ADMIN_TOKEN: test-admin-token
         run: python scripts/verify_deployment.py
