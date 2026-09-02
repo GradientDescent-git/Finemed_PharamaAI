@@ -103,9 +103,11 @@ def test_cors_configuration_restricts_unlisted_origins(client):
     assert res.headers.get("access-control-allow-origin") != "https://malicious-domain.com"
 
 
-def test_chat_rate_limiting_exceeded(client):
+def test_chat_rate_limiting_exceeded(client, monkeypatch):
     """Assert /chat returns 429 Too Many Requests when request threshold is exceeded."""
-    headers = {"X-API-Key": "test-client-key"}
+    api_key = "rate-limit-test-key"
+    monkeypatch.setenv("CLIENT_API_KEY", api_key)
+    headers = {"X-API-Key": api_key}
     responses = []
     for _ in range(65):
         res = client.post("/chat", headers=headers, json={"question": "What is the forecast?"})
