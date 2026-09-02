@@ -37,3 +37,45 @@ jobs:
           CLIENT_API_KEY: test-client-key
           ADMIN_TOKEN: test-admin-token
         run: python scripts/verify_deployment.py
+
+  docker-verification:
+    name: Production Container Verification
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install verification dependencies
+        run: pip install httpx
+
+      - name: Build production Docker image
+        run: docker build -t finemed-ai:prod .
+
+      - name: Launch production container
+        run: |
+          docker run -d \
+            --name finemed-prod-container \
+            -p 8000:8000 \
+            -e CLIENT_API_KEY=test-client-key \
+            -e ADMIN_TOKEN=test-admin-token \
+            -e ENVIRONMENT=production \
+            -e GIT_COMMIT=${{ github.sha }} \
+            finemed-ai:prod
+          sleep 5
+
+      - name: Verify live container health & readiness endpoints
+        run: |
+          curl -f http://127.0.0.1:8000/health
+          curl -f http://127.0.0.1:8000/ready
+          curl -f http://127.0.0.1:8000/version
+
+      - name: Run live container verification suite
+        env:
+          CLIENT_API_KEY: test-client-key
+          ADMIN_TOKEN: test-admin-token
+        run: python scripts/verify_deployment.py
