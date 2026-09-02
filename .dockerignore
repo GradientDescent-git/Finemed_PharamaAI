@@ -27,7 +27,8 @@ notebooks
 data/01_raw
 data/02_bronze
 data/03_silver
-data/04_silver
+data/04_silver/*
+!data/04_silver/medicine/medicine_silver.parquet
 
 data/**/*.csv
 data/**/*.dbf

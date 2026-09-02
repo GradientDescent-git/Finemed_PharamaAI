@@ -20,6 +20,7 @@ RUN pip install --upgrade pip \
 
 COPY src ./src
 COPY scripts ./scripts
+COPY data ./data
 
 RUN mkdir -p \
     /app/data/01_raw \
