@@ -99,3 +99,63 @@ def test_notification_service_notify_failure(caplog):
     with caplog.at_level(logging.ERROR):
         service.notify_failure("Pipeline Stage 1 (ETL) failed: DB timeout")
     assert "[FAILED] Pipeline Stage 1 (ETL) failed: DB timeout" in caplog.text
+
+
+def test_forecast_evaluator_production_path_future_window(tmp_path, caplog):
+    """
+    Verify ForecastEvaluator (used by monthly_pipeline.py) detects future forecast window
+    where actuals exist only through 2026-05-30 while forecast is 2026-05-31 to 2026-06-29.
+    """
+    from finemed_ai.demand_forecasting.evaluation import ForecastEvaluator, OverallEvaluation
+    
+    evaluator = ForecastEvaluator(forecast_dir=tmp_path)
+    
+    actuals_df = pd.DataFrame({
+        "Medicine_ID": ["1", "2"],
+        "Daily_Demand_Date": ["2026-05-29", "2026-05-30"],
+        "Daily_Demand": [50.0, 60.0]
+    })
+    
+    forecast_df = pd.DataFrame({
+        "Medicine_ID": ["0001", "0002"],
+        "Forecast_Date": ["2026-05-31", "2026-06-01"],
+        "Predicted_Demand": [55.0, 65.0]
+    })
+    
+    with caplog.at_level(logging.WARNING):
+        result = evaluator.evaluate(actuals_df=actuals_df, forecast_df=forecast_df)
+    
+    assert isinstance(result, OverallEvaluation)
+    assert result.has_overlap is False
+    assert result.matched_rows == 0
+    assert result.total_medicines_evaluated == 0
+    assert "Forecast evaluation pending: actual demand for forecast window" in caplog.text
+
+
+def test_forecast_evaluator_production_path_overlapping_window(tmp_path):
+    """
+    Verify ForecastEvaluator matches Medicine_IDs across string zfill formats when actuals overlap.
+    """
+    from finemed_ai.demand_forecasting.evaluation import ForecastEvaluator, OverallEvaluation
+    
+    evaluator = ForecastEvaluator(forecast_dir=tmp_path)
+    
+    actuals_df = pd.DataFrame({
+        "Medicine_ID": ["1", "2"],
+        "Daily_Demand_Date": ["2026-06-01", "2026-06-02"],
+        "Daily_Demand": [100.0, 200.0]
+    })
+    
+    forecast_df = pd.DataFrame({
+        "Medicine_ID": ["0001", "0002"],
+        "Forecast_Date": ["2026-06-01", "2026-06-02"],
+        "Predicted_Demand": [95.0, 205.0]
+    })
+    
+    result = evaluator.evaluate(actuals_df=actuals_df, forecast_df=forecast_df)
+    
+    assert isinstance(result, OverallEvaluation)
+    assert result.has_overlap is True
+    assert result.matched_rows == 2
+    assert result.total_medicines_evaluated == 2
+    assert result.overall_wape_pct > 0.0

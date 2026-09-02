@@ -123,6 +123,8 @@ ACTUAL_DATE_CANDIDATES: Sequence[str] = (
     "invoice_date",
     "Demand_Date",
     "demand_date",
+    "Daily_Demand_Date",
+    "daily_demand_date",
     "Actual_Date",
     "actual_date",
     "Forecast_Date",
@@ -147,6 +149,8 @@ FORECAST_DATE_CANDIDATES: Sequence[str] = (
 ACTUAL_QTY_CANDIDATES: Sequence[str] = (
     "Actual_Demand",
     "actual_demand",
+    "Daily_Demand",
+    "daily_demand",
     "Demand_Qty",
     "demand_qty",
     "target",
@@ -845,12 +849,19 @@ class ForecastEvaluator:
 
         if merged.empty:
 
-            logger.warning(
-                "No forecast/actual overlap found. "
-                "This does NOT mean forecast error is zero. "
-                "Metrics are unavailable until actual demand exists "
-                "for the forecast horizon."
-            )
+            if actual_end_date and forecast_start_date and actual_end_date < forecast_start_date:
+                logger.warning(
+                    "Forecast evaluation pending: actual demand for forecast window (%s to %s) is not yet available in historical records (actuals available through %s).",
+                    forecast_start_date,
+                    forecast_end_date,
+                    actual_end_date,
+                )
+            else:
+                logger.warning(
+                    "No forecast/actual overlap found | forecast_window=%s..%s (meds=%d) | actuals_window=%s..%s (meds=%d). Metrics unavailable.",
+                    forecast_start_date, forecast_end_date, forecasts["Medicine_ID"].nunique(),
+                    actual_start_date, actual_end_date, actuals["Medicine_ID"].nunique(),
+                )
 
             result = _empty_overall_evaluation(
                 forecast_rows=len(forecasts),
@@ -1129,6 +1140,7 @@ class ForecastEvaluator:
             normalized["Medicine_ID"]
             .astype("string")
             .str.strip()
+            .str.zfill(4)
         )
 
         normalized["Forecast_Date"] = (
@@ -1317,6 +1329,7 @@ class ForecastEvaluator:
             normalized["Medicine_ID"]
             .astype("string")
             .str.strip()
+            .str.zfill(4)
         )
 
         normalized["Forecast_Date"] = (

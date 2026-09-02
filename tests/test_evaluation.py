@@ -50,7 +50,7 @@ def test_forecast_evaluator_run(tmp_path):
     assert result.total_medicines_evaluated == 1
     assert result.overall_wape_pct > 0
     assert len(result.medicines) == 1
-    assert result.medicines[0].medicine_id == "1"
+    assert result.medicines[0].medicine_id in ["1", "0001"]
 
     # verify persistence
     latest = evaluator.load_latest_evaluation()
