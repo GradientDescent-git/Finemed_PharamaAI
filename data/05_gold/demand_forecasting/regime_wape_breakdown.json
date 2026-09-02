@@ -1,46 +1,40 @@
 {
-  "evaluation_scope": "FineMed Pharma AI 158 Medicine Portfolio",
-  "evaluation_methodology": "Leakage-Aware Rolling Backtest",
+  "evaluation_scope": "FineMed Pharma AI 91 Medicine Portfolio",
+  "total_classified_skus": 91,
+  "total_holdout_evaluated_skus": 76,
+  "regime_distribution": {
+    "Lumpy": 79,
+    "Intermittent": 12
+  },
   "regimes": {
-    "Smooth / Fast-Moving": {
-      "sku_count": 42,
-      "adi_range": "< 1.32",
-      "cv2_range": "< 0.49",
-      "tsb_wape_pct": 21.34,
-      "chronos2_p50_wape_pct": 21.8,
-      "selected_model": "TSB / Hybrid"
+    "Intermittent": {
+      "classified_portfolio_skus": 12,
+      "holdout_evaluated_skus": 8,
+      "routing_wape_pct": 15.17,
+      "tsb_wape_pct": 15.17,
+      "chronos_wape_pct": 18.263,
+      "tsb_skus_selected": 8,
+      "chronos_skus_selected": 0,
+      "selected_production_model": "TSB"
     },
-    "Intermittent / Slow-Moving": {
-      "sku_count": 68,
-      "adi_range": ">= 1.32",
-      "cv2_range": "< 0.49",
-      "tsb_wape_pct": 26.85,
-      "chronos2_p50_wape_pct": 31.4,
-      "selected_model": "TSB"
-    },
-    "Lumpy / Spiky Demand": {
-      "sku_count": 36,
-      "adi_range": ">= 1.32",
-      "cv2_range": ">= 0.49",
-      "tsb_wape_pct": 29.1,
-      "chronos2_p50_wape_pct": 36.12,
-      "selected_model": "TSB"
-    },
-    "Erratic": {
-      "sku_count": 12,
-      "adi_range": "< 1.32",
-      "cv2_range": ">= 0.49",
-      "tsb_wape_pct": 27.42,
-      "chronos2_p50_wape_pct": 30.15,
-      "selected_model": "TSB"
+    "Lumpy": {
+      "classified_portfolio_skus": 79,
+      "holdout_evaluated_skus": 68,
+      "routing_wape_pct": 19.109,
+      "tsb_wape_pct": 20.164,
+      "chronos_wape_pct": 21.699,
+      "tsb_skus_selected": 59,
+      "chronos_skus_selected": 9,
+      "selected_production_model": "TSB"
     }
   },
   "overall_portfolio": {
-    "total_skus": 158,
-    "tsb_holdout_wape_pct": 25.577,
-    "hybrid_holdout_wape_pct": 26.013,
-    "chronos2_p50_holdout_wape_pct": 27.724,
-    "p10_p90_calibration_coverage_pct": 82.4,
+    "total_classified_skus": 91,
+    "total_evaluated_skus": 76,
+    "holdout_routing_wape_pct": 19.025,
+    "holdout_tsb_wape_pct": 20.057,
+    "holdout_chronos_wape_pct": 21.626,
+    "empirical_p10_p90_coverage_pct": 73.32,
     "target_coverage_pct": 80.0
   }
 }

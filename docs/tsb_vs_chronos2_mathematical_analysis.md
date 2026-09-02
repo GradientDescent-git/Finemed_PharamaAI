@@ -45,30 +45,24 @@ Chronos-2 P50 Holdout WAPE  → 27.724%
 
 ## 3. Demand Regime Error Decomposition
 
-WAPE broken down across demand velocity regimes:
+Syntetos-Boylan demand regime classification ($\text{ADI}$ vs. $CV^2$) computed dynamically via [`src/finemed_ai/demand_forecasting/generate_regime_breakdown.py`](file:///C:/Users/User/.gemini/antigravity/scratch/Finemed_PharamaAI/src/finemed_ai/demand_forecasting/generate_regime_breakdown.py) from [`data/05_gold/demand_forecasting/regime_analysis/medicine_regimes.parquet`](file:///C:/Users/User/.gemini/antigravity/scratch/Finemed_PharamaAI/data/05_gold/demand_forecasting/regime_analysis/medicine_regimes.parquet) and [`data/05_gold/demand_forecasting/routing_rule_backtest/routing_rule_backtest_regime_summary.parquet`](file:///C:/Users/User/.gemini/antigravity/scratch/Finemed_PharamaAI/data/05_gold/demand_forecasting/routing_rule_backtest/routing_rule_backtest_regime_summary.parquet):
 
-## 3. Demand Regime Error Decomposition
-
-Syntetos-Boylan demand regime classification (ADI vs. $CV^2$) computed via [`src/finemed_ai/demand_forecasting/regime_analysis.py`](file:///C:/Users/User/.gemini/antigravity/scratch/Finemed_PharamaAI/src/finemed_ai/demand_forecasting/regime_analysis.py) and generated artifact [`data/05_gold/demand_forecasting/regime_wape_breakdown.json`](file:///C:/Users/User/.gemini/antigravity/scratch/Finemed_PharamaAI/data/05_gold/demand_forecasting/regime_wape_breakdown.json):
-
-| Demand Regime | Syntetos-Boylan Boundaries | SKU Count | TSB WAPE | Chronos-2 P50 WAPE | Selected Production Model |
-| :--- | :---: | :---: | :---: | :---: | :---: |
-| **Smooth / Fast-Moving** | $\text{ADI} < 1.32, CV^2 < 0.49$ | 42 | **21.34%** | 21.80% | **TSB / Hybrid** |
-| **Intermittent / Slow-Moving** | $\text{ADI} \ge 1.32, CV^2 < 0.49$ | 68 | **26.85%** | 31.40% | **TSB** |
-| **Lumpy / Spiky Demand** | $\text{ADI} \ge 1.32, CV^2 \ge 0.49$ | 36 | **29.10%** | 36.12% | **TSB** |
-| **Erratic** | $\text{ADI} < 1.32, CV^2 \ge 0.49$ | 12 | **27.42%** | 30.15% | **TSB** |
-| **Overall Portfolio** | **158 SKUs** | **158** | **25.577%** | **27.724%** | **TSB (Empirical Routing)** |
+| Demand Regime | Syntetos-Boylan Boundaries | Classified SKUs | Holdout Evaluated SKUs | TSB WAPE | Chronos-2 P50 WAPE | Dynamic Routing WAPE | Selected Production Model |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **Intermittent** | $\text{ADI} \ge 1.32, CV^2 < 0.49$ | 12 | 8 | **15.170%** | 18.263% | **15.170%** | **TSB (100%)** |
+| **Lumpy** | $\text{ADI} \ge 1.32, CV^2 \ge 0.49$ | 79 | 68 | 20.164% | 21.699% | **19.109%** | **TSB (86.8%) / Chronos-2 (13.2%)** |
+| **Overall Portfolio** | **Full Portfolio** | **91** | **76** | 20.057% | 21.626% | **19.025%** | **Dynamic Model Routing** |
 
 ---
 
 ## 4. Probabilistic Forecast Calibration (P10–P90 Interval)
 
-FineMed Pharma AI evaluates probabilistic forecasts using [`src/finemed_ai/demand_forecasting/chronos_calibration.py`](file:///C:/Users/User/.gemini/antigravity/scratch/Finemed_PharamaAI/src/finemed_ai/demand_forecasting/chronos_calibration.py) by verifying empirical calibration coverage:
+FineMed Pharma AI evaluates probabilistic forecasts using [`src/finemed_ai/demand_forecasting/chronos_calibration.py`](file:///C:/Users/User/.gemini/antigravity/scratch/Finemed_PharamaAI/src/finemed_ai/demand_forecasting/chronos_calibration.py) and context optimization backtest outputs by verifying empirical calibration coverage:
 
 $$\text{Calibration Coverage} = \frac{1}{N} \sum_{i=1}^{N} \mathbb{I}\left( y_i \in [\hat{q}_{0.10, i}, \hat{q}_{0.90, i}] \right)$$
 
 - **Target Interval Coverage**: $80.0\%$ ($\alpha = 0.10 \dots 0.90$)
-- **Observed Empirical Coverage**: $82.4\%$ across 158 evaluated SKUs
-- **Reproducible Verification**: Run `python src/finemed_ai/demand_forecasting/generate_regime_breakdown.py` to regenerate the JSON summary artifact.
+- **Observed Empirical Coverage**: $73.32\%$ across 76 holdout backtest evaluated SKUs
+- **Reproducible Verification**: Execute `python src/finemed_ai/demand_forecasting/generate_regime_breakdown.py` to regenerate the JSON summary artifact [`data/05_gold/demand_forecasting/regime_wape_breakdown.json`](file:///C:/Users/User/.gemini/antigravity/scratch/Finemed_PharamaAI/data/05_gold/demand_forecasting/regime_wape_breakdown.json).
 
-This confirms that the generated P10–P90 prediction intervals provide valid, calibrated risk bounds for inventory planning.
+This confirms that the generated P10–P90 prediction intervals provide empirical risk bounds for inventory planning.
