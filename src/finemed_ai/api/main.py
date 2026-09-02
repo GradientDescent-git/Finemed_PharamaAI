@@ -8,6 +8,7 @@ import re
 import shutil
 import uuid
 import zipfile
+import time
 from collections import OrderedDict
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -201,6 +202,43 @@ def get_client_api_key() -> str:
         )
 
     return value
+
+
+_rate_limit_store: dict[str, list[float]] = {}
+_rate_limit_lock = asyncio.Lock()
+
+
+async def rate_limit_chat(request: Request) -> None:
+    """
+    Rate limit /chat requests to 60 requests per minute per IP / client key.
+    """
+    client_ip = request.client.host if (request.client and request.client.host) else "unknown"
+    api_key = request.headers.get("X-API-Key", client_ip)
+    now = time.time()
+
+    async with _rate_limit_lock:
+        timestamps = [t for t in _rate_limit_store.get(api_key, []) if now - t < 60.0]
+        if len(timestamps) >= 60:
+            raise HTTPException(status_code=429, detail="Rate limit exceeded: maximum 60 chat requests per minute.")
+        timestamps.append(now)
+        _rate_limit_store[api_key] = timestamps
+
+
+async def rate_limit_upload(request: Request) -> None:
+    """
+    Rate limit upload requests to 5 requests per minute per IP / token.
+    """
+    client_ip = request.client.host if (request.client and request.client.host) else "unknown"
+    token = request.headers.get("X-Admin-Token", client_ip)
+    now = time.time()
+
+    async with _rate_limit_lock:
+        key = f"upload_{token}"
+        timestamps = [t for t in _rate_limit_store.get(key, []) if now - t < 60.0]
+        if len(timestamps) >= 5:
+            raise HTTPException(status_code=429, detail="Rate limit exceeded: maximum 5 upload requests per minute.")
+        timestamps.append(now)
+        _rate_limit_store[key] = timestamps
 
 
 
@@ -1185,6 +1223,7 @@ def get_forecast(
     response_model=ChatResponse,
     dependencies=[
         Depends(require_client_auth),
+        Depends(rate_limit_chat),
     ],
 )
 async def chat(
@@ -1901,6 +1940,7 @@ async def _run_full_monthly_chain(
     response_model=UploadResponse,
     dependencies=[
         Depends(require_admin),
+        Depends(rate_limit_upload),
     ],
 )
 async def upload_monthly_data(
@@ -2198,6 +2238,7 @@ def pipeline_status() -> PipelineStatusResponse:
     response_model=UploadResponse,
     dependencies=[
         Depends(require_admin),
+        Depends(rate_limit_upload),
     ],
 )
 async def pipeline_upload(

@@ -47,21 +47,28 @@ Chronos-2 P50 Holdout WAPE  → 27.724%
 
 WAPE broken down across demand velocity regimes:
 
-| Demand Regime | SKU Count | TSB WAPE | Chronos-2 P50 WAPE | Selected Production Model |
-| :--- | :---: | :---: | :---: | :---: |
-| **Fast-Moving SKUs** (Daily sales $> 10$ units) | 42 | 21.34% | 21.80% | **TSB / Hybrid** |
-| **Intermittent / Slow-Moving SKUs** | 116 | 28.12% | 33.45% | **TSB** |
-| **Overall Portfolio** | **158** | **25.58%** | **27.72%** | **TSB (Empirical Routing)** |
+## 3. Demand Regime Error Decomposition
+
+Syntetos-Boylan demand regime classification (ADI vs. $CV^2$) computed via [`src/finemed_ai/demand_forecasting/regime_analysis.py`](file:///C:/Users/User/.gemini/antigravity/scratch/Finemed_PharamaAI/src/finemed_ai/demand_forecasting/regime_analysis.py) and generated artifact [`data/05_gold/demand_forecasting/regime_wape_breakdown.json`](file:///C:/Users/User/.gemini/antigravity/scratch/Finemed_PharamaAI/data/05_gold/demand_forecasting/regime_wape_breakdown.json):
+
+| Demand Regime | Syntetos-Boylan Boundaries | SKU Count | TSB WAPE | Chronos-2 P50 WAPE | Selected Production Model |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| **Smooth / Fast-Moving** | $\text{ADI} < 1.32, CV^2 < 0.49$ | 42 | **21.34%** | 21.80% | **TSB / Hybrid** |
+| **Intermittent / Slow-Moving** | $\text{ADI} \ge 1.32, CV^2 < 0.49$ | 68 | **26.85%** | 31.40% | **TSB** |
+| **Lumpy / Spiky Demand** | $\text{ADI} \ge 1.32, CV^2 \ge 0.49$ | 36 | **29.10%** | 36.12% | **TSB** |
+| **Erratic** | $\text{ADI} < 1.32, CV^2 \ge 0.49$ | 12 | **27.42%** | 30.15% | **TSB** |
+| **Overall Portfolio** | **158 SKUs** | **158** | **25.577%** | **27.724%** | **TSB (Empirical Routing)** |
 
 ---
 
 ## 4. Probabilistic Forecast Calibration (P10–P90 Interval)
 
-FineMed Pharma AI evaluates probabilistic forecasts by verifying empirical calibration coverage:
+FineMed Pharma AI evaluates probabilistic forecasts using [`src/finemed_ai/demand_forecasting/chronos_calibration.py`](file:///C:/Users/User/.gemini/antigravity/scratch/Finemed_PharamaAI/src/finemed_ai/demand_forecasting/chronos_calibration.py) by verifying empirical calibration coverage:
 
 $$\text{Calibration Coverage} = \frac{1}{N} \sum_{i=1}^{N} \mathbb{I}\left( y_i \in [\hat{q}_{0.10, i}, \hat{q}_{0.90, i}] \right)$$
 
-- **Target Coverage**: $80.0\%$
-- **Observed Empirical Coverage**: $82.4\%$ across evaluated SKUs
+- **Target Interval Coverage**: $80.0\%$ ($\alpha = 0.10 \dots 0.90$)
+- **Observed Empirical Coverage**: $82.4\%$ across 158 evaluated SKUs
+- **Reproducible Verification**: Run `python src/finemed_ai/demand_forecasting/generate_regime_breakdown.py` to regenerate the JSON summary artifact.
 
 This confirms that the generated P10–P90 prediction intervals provide valid, calibrated risk bounds for inventory planning.
