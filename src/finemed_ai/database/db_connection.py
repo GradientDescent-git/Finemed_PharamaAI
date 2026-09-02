@@ -85,3 +85,22 @@ def close_connection(conn: connection) -> None:
     if conn is not None:
         conn.close()
         logger.info("Database connection closed.")
+
+
+def test_connection() -> bool:
+    """
+    Test PostgreSQL database connection and fail fast if auth or network fails.
+    """
+    from sqlalchemy import text
+
+    logger.info("Testing database connection to %s:%s...", DATABASE_CONFIG.host, DATABASE_CONFIG.port)
+    try:
+        engine = get_engine()
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        logger.info("Database connection test passed.")
+        return True
+    except Exception as exc:
+        logger.error("Database connection test failed for host=%s db=%s user=%s: %s",
+                     DATABASE_CONFIG.host, DATABASE_CONFIG.database, DATABASE_CONFIG.user, exc)
+        raise RuntimeError(f"Database authentication/connection check failed: {exc}") from exc

@@ -900,10 +900,16 @@ def get_version() -> dict[str, Any]:
     """
     Return build and runtime version information.
     """
+    git_sha = (
+        os.environ.get("GIT_COMMIT")
+        or os.environ.get("GIT_COMMIT_SHA")
+        or "bd1a5a4"
+    )
     return {
         "name": "Finemed PharmaAI",
         "version": "1.0.0",
-        "environment": "production",
+        "environment": os.environ.get("ENVIRONMENT", "production"),
+        "git_commit": git_sha,
         "forecasting_models": ["TSB", "Chronos-2 P50"],
     }
 

@@ -53,16 +53,58 @@ class PostDeploymentEvaluator:
                 status="DEGRADED",
             )
 
+        # Create working copies
+        preds = predictions_df.copy()
+        acts = actuals_df.copy()
+
+        # 1. Resolve Medicine_ID column name
+        pred_med_col = next((c for c in ["Medicine_ID", "mdcode", "item_id"] if c in preds.columns), None)
+        act_med_col = next((c for c in ["Medicine_ID", "mdcode", "item_id"] if c in acts.columns), None)
+
+        if not pred_med_col or not act_med_col:
+            logger.warning("PostDeploymentEvaluator missing Medicine_ID column in predictions (%s) or actuals (%s)", pred_med_col, act_med_col)
+            return PostEvaluationResult(
+                run_id=run_id, evaluated_at=datetime.now().isoformat(), total_medicines=0,
+                wape=0.0, bias=0.0, mae=0.0, status="DEGRADED"
+            )
+
+        # 2. Resolve Forecast_Date column name
+        pred_date_col = next((c for c in ["Forecast_Date", "date", "timestamp"] if c in preds.columns), None)
+        act_date_col = next((c for c in ["Forecast_Date", "Daily_Demand_Date", "date", "timestamp"] if c in acts.columns), None)
+
+        if not pred_date_col or not act_date_col:
+            logger.warning("PostDeploymentEvaluator missing date column in predictions (%s) or actuals (%s)", pred_date_col, act_date_col)
+            return PostEvaluationResult(
+                run_id=run_id, evaluated_at=datetime.now().isoformat(), total_medicines=0,
+                wape=0.0, bias=0.0, mae=0.0, status="DEGRADED"
+            )
+
+        # Normalize Medicine_ID (string zfilled to 4 digits)
+        preds["Medicine_ID_norm"] = preds[pred_med_col].astype(str).str.strip().str.zfill(4)
+        acts["Medicine_ID_norm"] = acts[act_med_col].astype(str).str.strip().str.zfill(4)
+
+        # Normalize Forecast_Date (normalized calendar date)
+        preds["Forecast_Date_norm"] = pd.to_datetime(preds[pred_date_col], errors="coerce").dt.normalize()
+        acts["Forecast_Date_norm"] = pd.to_datetime(acts[act_date_col], errors="coerce").dt.normalize()
+
         merged = pd.merge(
-            predictions_df,
-            actuals_df,
-            on=["Medicine_ID", "Forecast_Date"],
+            preds,
+            acts,
+            left_on=["Medicine_ID_norm", "Forecast_Date_norm"],
+            right_on=["Medicine_ID_norm", "Forecast_Date_norm"],
             suffixes=("_pred", "_actual"),
             how="inner",
         )
 
         if merged.empty:
-            logger.warning("No matching dates found between predictions and actuals for run %s", run_id)
+            logger.warning(
+                "No matching records found in PostDeploymentEvaluator merge for run %s | "
+                "preds: shape=%s, med_sample=%s, dates=%s..%s | "
+                "acts: shape=%s, med_sample=%s, dates=%s..%s",
+                run_id,
+                preds.shape, preds["Medicine_ID_norm"].head(3).tolist(), preds["Forecast_Date_norm"].min(), preds["Forecast_Date_norm"].max(),
+                acts.shape, acts["Medicine_ID_norm"].head(3).tolist(), acts["Forecast_Date_norm"].min(), acts["Forecast_Date_norm"].max(),
+            )
             return PostEvaluationResult(
                 run_id=run_id,
                 evaluated_at=datetime.now().isoformat(),
@@ -73,8 +115,8 @@ class PostDeploymentEvaluator:
                 status="DEGRADED",
             )
 
-        pred_col = "Predicted_Demand" if "Predicted_Demand" in merged.columns else "P50"
-        actual_col = "Daily_Demand" if "Daily_Demand" in merged.columns else "Actual_Demand"
+        pred_col = next((c for c in ["Predicted_Demand", "P50", "predicted_demand"] if c in merged.columns), None) or ("Predicted_Demand_pred" if "Predicted_Demand_pred" in merged.columns else "Predicted_Demand")
+        actual_col = next((c for c in ["Daily_Demand", "Actual_Demand", "Actual", "demand", "quantity"] if c in merged.columns), None) or ("Daily_Demand_actual" if "Daily_Demand_actual" in merged.columns else "Daily_Demand")
 
         y_true = merged[actual_col].to_numpy(dtype=float)
         y_pred = merged[pred_col].to_numpy(dtype=float)
@@ -100,7 +142,7 @@ class PostDeploymentEvaluator:
         return PostEvaluationResult(
             run_id=run_id,
             evaluated_at=datetime.now().isoformat(),
-            total_medicines=int(merged["Medicine_ID"].nunique()),
+            total_medicines=int(merged["Medicine_ID_norm"].nunique()),
             wape=round(wape, 4),
             bias=round(bias, 4),
             mae=round(mae, 4),

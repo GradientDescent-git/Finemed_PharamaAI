@@ -862,6 +862,83 @@ Current engineering focus includes:
 
 ---
 
+# 🚀 Production Deployment & Operations Runbook
+
+## Production Architecture & Environment Variables
+
+| Variable Name | Required | Default Value | Description |
+| :--- | :---: | :--- | :--- |
+| `ENVIRONMENT` | Yes | `production` | Deployment environment identifier (`production`, `staging`). |
+| `CLIENT_API_KEY` | Yes | None | Secret API Key required for staff & client forecast endpoints (`X-API-Key`). |
+| `ADMIN_TOKEN` | Yes | None | Secret Token required for monthly upload & pipeline administration (`X-Admin-Token`). |
+| `GIT_COMMIT` | Optional | `bd1a5a4` | Injected Git commit SHA exposed via `/version`. |
+| `PORT` | Optional | `8000` | Port bound by ASGI Uvicorn server process. |
+
+> **Fail-Closed Security Guarantee**: If `CLIENT_API_KEY` or `ADMIN_TOKEN` is unconfigured in the production environment, application startup is guarded and protected endpoints respond with `503 Service Unavailable` rather than allowing unauthenticated access.
+
+---
+
+## API Usage Examples
+
+### 1. Health Probe (`GET /health`)
+```bash
+curl -X GET "http://127.0.0.1:8000/health"
+```
+```json
+{
+  "status": "ok",
+  "forecast_store_loaded": true,
+  "medicines_available": 158,
+  "conversation_service_available": true,
+  "chat_available": true
+}
+```
+
+### 2. Readiness Probe (`GET /ready`)
+```bash
+curl -X GET "http://127.0.0.1:8000/ready"
+```
+```json
+{
+  "status": "ready",
+  "ready": true,
+  "store_ready": true,
+  "orchestrator_ready": true,
+  "detail": "Production forecast store is ready."
+}
+```
+
+### 3. Authenticated Top Demand Forecast (`GET /forecast/top`)
+```bash
+curl -X GET "http://127.0.0.1:8000/forecast/top?n=5" \
+     -H "X-API-Key: test-client-key"
+```
+
+### 4. Single Medicine Forecast Range (`GET /forecast/{medicine_id}`)
+```bash
+curl -X GET "http://127.0.0.1:8000/forecast/0001" \
+     -H "X-API-Key: test-client-key"
+```
+
+---
+
+## Operations & Rollback Runbook
+
+### Service Startup & Restart Recovery
+1. Ensure `data/04_silver/medicine/medicine_silver.parquet` and `data/05_gold/demand_forecasting/production_forecasts/latest.parquet` exist.
+2. Export production secrets: `export CLIENT_API_KEY="<secret>" ADMIN_TOKEN="<admin-secret>"`.
+3. Launch container or process: `uvicorn finemed_ai.api.main:app --host 0.0.0.0 --port 8000`.
+4. Validate readiness: `curl http://127.0.0.1:8000/ready`.
+
+### Rollback Procedure
+If a deployment fails validation or health checks:
+1. Re-point service to the previous Git commit baseline (`bd1a5a4`).
+2. Restore promoted parquet artifact `data/05_gold/demand_forecasting/production_forecasts/latest.parquet` from manifest history.
+3. Restart process: `uvicorn finemed_ai.api.main:app --host 0.0.0.0 --port 8000`.
+4. Verify `/version` returns previous commit SHA and `/ready` returns `200 OK`.
+
+---
+
 # Final Perspective
 
 FinemedAI is designed as more than a notebook-based machine learning experiment.

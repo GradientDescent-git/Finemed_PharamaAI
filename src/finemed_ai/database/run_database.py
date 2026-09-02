@@ -51,9 +51,10 @@ def run_database(
     logger.info("=" * 80)
 
     try:
+        from finemed_ai.database.db_connection import test_connection
+        test_connection()
 
         if not warehouse_tables:
-
             raise ValueError(
                 "Warehouse tables dictionary is empty."
             )

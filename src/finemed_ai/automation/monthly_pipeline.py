@@ -574,6 +574,14 @@ class MonthlyPipeline:
 
             message = str(exc)
 
+            try:
+                from finemed_ai.automation.notification import NotificationService
+                NotificationService().notify_failure(
+                    f"Pipeline Stage {stage_number}/6 ({stage_name}) failed: {message}"
+                )
+            except Exception:
+                logger.exception("Failed to send notification for pipeline failure.")
+
             if message.startswith(
                 f"Stage {stage_number}/6"
             ):
@@ -591,6 +599,14 @@ class MonthlyPipeline:
                 stage_number,
                 stage_name,
             )
+
+            try:
+                from finemed_ai.automation.notification import NotificationService
+                NotificationService().notify_failure(
+                    f"Pipeline Stage {stage_number}/6 ({stage_name}) unexpected error: {exc}"
+                )
+            except Exception:
+                logger.exception("Failed to send notification for pipeline failure.")
 
             raise MonthlyPipelineError(
                 f"Stage {stage_number}/6 failed "
