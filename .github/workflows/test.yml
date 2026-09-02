@@ -28,14 +28,14 @@ jobs:
 
       - name: Run unit, integration & failure test matrix
         env:
-          CLIENT_API_KEY: test-client-key
-          ADMIN_TOKEN: test-admin-token
+          CLIENT_API_KEY: FinemedAI_2026
+          ADMIN_TOKEN: FinemedAI2026
         run: pytest tests/ -v
 
       - name: Run automated deployment verification
         env:
-          CLIENT_API_KEY: test-client-key
-          ADMIN_TOKEN: test-admin-token
+          CLIENT_API_KEY: FinemedAI_2026
+          ADMIN_TOKEN: FinemedAI2026
         run: python scripts/verify_deployment.py
 
   docker-verification:
@@ -61,8 +61,8 @@ jobs:
           docker run -d \
             --name finemed-prod-container \
             -p 8000:8000 \
-            -e CLIENT_API_KEY=test-client-key \
-            -e ADMIN_TOKEN=test-admin-token \
+            -e CLIENT_API_KEY=FinemedAI_2026 \
+            -e ADMIN_TOKEN=FinemedAI2026 \
             -e ENVIRONMENT=production \
             -e GIT_COMMIT=${{ github.sha }} \
             finemed-ai:prod
@@ -76,6 +76,6 @@ jobs:
 
       - name: Run live container verification suite
         env:
-          CLIENT_API_KEY: test-client-key
-          ADMIN_TOKEN: test-admin-token
+          CLIENT_API_KEY: FinemedAI_2026
+          ADMIN_TOKEN: FinemedAI2026
         run: python scripts/verify_deployment.py

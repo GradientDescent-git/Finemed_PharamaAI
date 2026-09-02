@@ -23,9 +23,9 @@ from fastapi.testclient import TestClient
 from finemed_ai.api.main import app
 
 if "CLIENT_API_KEY" not in os.environ:
-    os.environ["CLIENT_API_KEY"] = "test-client-key"
+    os.environ["CLIENT_API_KEY"] = "FinemedAI_2026"
 if "ADMIN_TOKEN" not in os.environ:
-    os.environ["ADMIN_TOKEN"] = "test-admin-token"
+    os.environ["ADMIN_TOKEN"] = "FinemedAI2026"
 
 CLIENT_API_KEY = os.environ["CLIENT_API_KEY"]
 ADMIN_TOKEN = os.environ["ADMIN_TOKEN"]
