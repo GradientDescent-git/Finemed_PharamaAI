@@ -52,19 +52,20 @@ def make_request(path: str, method: str = "GET", headers: dict = None, body: dic
             content = resp.read().decode("utf-8")
             return resp.status, json.loads(content) if content else {}
     except (urllib.error.HTTPError, urllib.error.URLError):
-        # Fallback to in-process TestClient execution
-        if method.upper() == "GET":
-            res = client.get(path, headers=req_headers)
-        elif method.upper() == "POST":
-            res = client.post(path, headers=req_headers, json=body)
-        else:
-            res = client.request(method, path, headers=req_headers, json=body)
-        
-        try:
-            parsed = res.json()
-        except Exception:
-            parsed = {"detail": res.text}
-        return res.status_code, parsed
+        # Fallback to in-process TestClient execution with active lifespan
+        with TestClient(app) as tc:
+            if method.upper() == "GET":
+                res = tc.get(path, headers=req_headers)
+            elif method.upper() == "POST":
+                res = tc.post(path, headers=req_headers, json=body)
+            else:
+                res = tc.request(method, path, headers=req_headers, json=body)
+            
+            try:
+                parsed = res.json()
+            except Exception:
+                parsed = {"detail": res.text}
+            return res.status_code, parsed
     except Exception as exc:
         log(f"Execution error on {path}: {exc}", "FAIL")
         return 0, {}
